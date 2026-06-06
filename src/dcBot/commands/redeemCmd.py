@@ -33,21 +33,48 @@ def register_redeem_command(
         await interaction.response.defer(thinking=True)
 
         try:
+            # Check if code is in cache and marked invalid
+            gift_code_cache = bot_data.get("gift_code_cache", {})
+            code_cache = gift_code_cache.get(gift_code, {})
+
+            if code_cache and code_cache["status"] == "invalid":
+                await interaction.followup.send(
+                    f"❌ Gift code `{gift_code}` is expired or invalid (last checked: {code_cache['last_checked']})"
+                )
+                return
+
             all_players = bot_data.get("players", [])
-            players_to_redeem = all_players
+            redeemed_codes = bot_data.setdefault("redeemed_codes", {})
+            already_redeemed_ids = set(redeemed_codes.get(gift_code, []))
+
+            skipped_count = 0
 
             if player_id:
                 target_player = next(
                     (p for p in all_players if p.get("player_id") == player_id), None
                 )
                 if not target_player:
-                    # Player not found, create a temporary one for one-off redemption
                     target_player = {"player_id": player_id, "player_nick": "N/A"}
+                if player_id in already_redeemed_ids:
+                    await interaction.followup.send(
+                        f"⏭️ Player `{player_id}` has already redeemed `{gift_code}`."
+                    )
+                    return
                 players_to_redeem = [target_player]
+            else:
+                players_to_redeem = [p for p in all_players if p.get("player_id") not in already_redeemed_ids]
+                skipped_count = len(all_players) - len(players_to_redeem)
+
+            if not players_to_redeem:
+                await interaction.followup.send(
+                    f"✅ All players have already redeemed `{gift_code}`."
+                )
+                return
 
             results = await redeem_giftcode_for_all_players(players_to_redeem, gift_code)
             failed = 0
-            updated = False
+            nick_updated = False
+            new_redemptions = []
 
             failed_players = []
             for item in results:
@@ -69,10 +96,12 @@ def register_redeem_command(
 
                 if player_to_update and page_nick and player_to_update.get("player_nick") != page_nick:
                     player_to_update["player_nick"] = page_nick
-                    updated = True
+                    nick_updated = True
 
                 success = item.get("success")
                 if success:
+                    if redeemed_player_id:
+                        new_redemptions.append(redeemed_player_id)
                     continue
 
                 result = item.get("result", {})
@@ -83,15 +112,32 @@ def register_redeem_command(
 
                 failed_players.append(f"❌ `{res_player_id}` ({res_player_nick}): {message}")
 
-            response_message = (
-                f"🎁 **Redeem Results for `{gift_code}`**\n"
-                f"🚀 `{len(results) - failed}/{len(results)}` succeeded!\n\n"
-            )
-            response_message += "\n".join(failed_players)
-            if updated:
+            if new_redemptions:
+                code_list = redeemed_codes.setdefault(gift_code, [])
+                for pid in new_redemptions:
+                    if pid not in code_list:
+                        code_list.append(pid)
+
+            if nick_updated or new_redemptions:
                 bot_data["players"] = all_players
                 save_bot_data(bot_data)
-                response_message += "\n\n💾 Updated player names from Kingshot page"
+
+            response_message = (
+                f"🎁 **Redeem Results for `{gift_code}`**\n"
+                f"🚀 `{len(results) - failed}/{len(results)}` succeeded!"
+            )
+            if skipped_count:
+                response_message += f"\n⏭️ `{skipped_count}` skipped (already redeemed)"
+            response_message += "\n\n"
+            response_message += "\n".join(failed_players)
+
+            footer_parts = []
+            if nick_updated:
+                footer_parts.append("Updated player names from Kingshot page")
+            if new_redemptions:
+                footer_parts.append(f"Recorded {len(new_redemptions)} new redemption(s)")
+            if footer_parts:
+                response_message += "\n\n💾 " + " • ".join(footer_parts)
 
             if len(response_message) > 1900:
                 response_message = response_message[:1900] + "\n…(truncated)"

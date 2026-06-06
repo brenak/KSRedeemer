@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
   kingshot-redeemer:
-    build: .
-    container_name: kingshot-redeemer-bot
+    image: brenak/kingshot-redeemer:latest
+    container_name: sdw-redeemer-bot
     restart: unless-stopped
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}

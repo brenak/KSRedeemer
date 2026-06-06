@@ -95,7 +95,14 @@ docker-compose logs -f
 3. Give it a name (e.g., "Kingshot Redeemer")
 4. Click **"Create"**
 
-### 2. Create a Bot User
+### 2. Set Install Link to None for Private Bot
+
+1. Go to the ⁠Discord Developer Portal and select your application.
+2. Navigate to the Installation tab in the left-hand menu.
+3. Scroll down to the Install Link section and change the setting to None.
+4. Click Save Changes at the bottom of the screen
+
+### 3. Create a Bot User
 
 1. In your application, go to the **"Bot"** tab
 2. Click **"Add Bot"** → **"Yes, do it!"**
@@ -103,7 +110,7 @@ docker-compose logs -f
    - ⚠️ **Save this token securely** - you'll need it for the `DISCORD_TOKEN` environment variable
 4. Bot can be public or private up to your choosing. I will always recommend private bots for security reasons.
 
-### 3. Invite the Bot to Your Server
+### 4. Invite the Bot to Your Server
 
 1. Go to the **"OAuth2"** → **"URL Generator"** tab
 2. Select these scopes:

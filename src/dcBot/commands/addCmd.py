@@ -1,8 +1,11 @@
 import discord
 from discord import app_commands
 from typing import Callable, Dict, Any
+import asyncio
+import random
 
 from dcBot.permissions import check_permissions
+from browser_automation.redeem import redeem_giftcode_for_all_players
 
 
 def register_add_command(
@@ -38,10 +41,51 @@ def register_add_command(
             bot_data["players"] = players
             save_bot_data(bot_data)
 
-            await interaction.followup.send(
-                f"✅ Added player `{player_id}` with placeholder nick `Player {player_id}`.\n"
-                f"💡 The nick will be updated when they redeem a code."
-            )
+            # Auto-redeem all valid codes for the new player
+            gift_code_cache = bot_data.get("gift_code_cache", {})
+            valid_codes = [
+                code for code, data in gift_code_cache.items()
+                if data.get("status") == "valid"
+            ]
+
+            response_text = ""
+            success_count = 0
+            redeemed_codes = bot_data.setdefault("redeemed_codes", {})
+
+            if valid_codes:
+                response_text += f"🎁 Auto-redeeming `{len(valid_codes)}` active code(s)...\n"
+                for code in valid_codes:
+                    await asyncio.sleep(random.uniform(5, 10))
+                    result = await redeem_giftcode_for_all_players([new_player], code)
+
+                    # Extract player nickname from result if available
+                    if result and len(result) > 0:
+                        item = result[0]
+                        if item.get("success"):
+                            success_count += 1
+                            # Track this redemption
+                            code_list = redeemed_codes.setdefault(code, [])
+                            if player_id not in code_list:
+                                code_list.append(player_id)
+
+                            page_nick = item.get("page_player_nick")
+                            if page_nick and new_player.get("player_nick") != page_nick:
+                                new_player["player_nick"] = page_nick
+
+                response_text += f"✅ Auto-redeemed `{success_count}/{len(valid_codes)}` code(s)\n"
+
+                # Save updated player with any nickname changes and redemption tracking
+                if success_count > 0:
+                    bot_data["players"] = players
+                    bot_data["redeemed_codes"] = redeemed_codes
+                    save_bot_data(bot_data)
+
+            # Build final response with actual nickname
+            final_response = f"✅ Added player `{player_id}` with nick `{new_player['player_nick']}`"
+            if response_text:
+                final_response += f"\n\n{response_text}"
+
+            await interaction.followup.send(final_response)
 
         except Exception as e:
             error_message = f"❌ Error adding player: {str(e)}"

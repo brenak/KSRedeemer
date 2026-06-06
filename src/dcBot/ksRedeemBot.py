@@ -9,9 +9,11 @@ from dcBot.commands.addCmd import register_add_command  # noqa: E402
 from dcBot.commands.removeCmd import register_remove_command  # noqa: E402
 from dcBot.commands.findCmd import register_find_command  # noqa: E402
 from dcBot.commands.helpCmd import register_help_command  # noqa: E402
+from dcBot.commands.codesCmd import register_codes_command  # noqa: E402
 from dcBot.commands.setupCmd import register_setup_command
 from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
+from dcBot.gift_code_cache import GiftCodeCacheManager
 
 
 def load_bot_data_with_players():
@@ -42,10 +44,14 @@ def init_bot(token: str) -> discord.Client:
     register_remove_command(tree, bot_data, save_bot_data_with_players)
     register_find_command(tree, bot_data)
     register_help_command(tree, bot_data)
+    register_codes_command(tree, bot_data)
     register_setup_command(tree, save_bot_data_with_players, bot_data)
     
     # Initialize UpdateChecker
     client.update_checker = UpdateChecker(client, bot_data, save_bot_data_with_players)
+
+    # Initialize GiftCodeCacheManager
+    client.gift_code_cache = GiftCodeCacheManager(client, bot_data, save_bot_data_with_players)
 
     @client.event
     async def on_ready():

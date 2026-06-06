@@ -1,7 +1,7 @@
 import json
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(os.path.join(__file__, "..", "..")))
+BASE_DIR = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "data"))
 BOT_DATA_FILE = os.path.join(DATA_DIR, "botData.json")
 

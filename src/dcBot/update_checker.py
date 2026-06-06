@@ -8,7 +8,7 @@ class UpdateChecker:
         self.bot = bot
         self.bot_data = bot_data
         self.save_data = save_data_func
-        self.image_name = "jarecoder/kingshot-redeemer"
+        self.image_name = "brenak/kingshot-redeemer"
         self.check_updates.start()
 
     def unload(self):

@@ -92,11 +92,22 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
             )
 
             embed.add_field(
+                name="🎁 /codes",
+                value=(
+                    "View all currently active gift codes.\n"
+                    "• Shows codes that are valid and not expired\n"
+                    "• Displays expiration dates\n"
+                    "• Updates every 6 hours"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
                 name="🔄 Auto-Update Check",
                 value=(
                     "The bot automatically checks for updates on Docker Hub every 24 hours.\n"
                     "• Notifications are sent to the configured channel\n"
-                    "• Checks against `jarecoder/kingshot-redeemer:latest`"
+                    "• Checks against `brenak/kingshot-redeemer:latest`"
                 ),
                 inline=False,
             )
