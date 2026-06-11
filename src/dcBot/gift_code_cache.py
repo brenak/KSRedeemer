@@ -63,6 +63,12 @@ class GiftCodeCacheManager:
                             if was_new and is_valid:
                                 new_codes.append(code)
 
+                        # Mark codes that disappeared from the API as invalid
+                        codes_from_api = {code_obj.get("code") for code_obj in gift_codes if code_obj.get("code")}
+                        for cached_code in list(cache.keys()):
+                            if cached_code not in codes_from_api:
+                                cache[cached_code]["status"] = "invalid"
+
                         # Auto-redeem new codes for all players
                         if new_codes:
                             players = self.bot_data.get("players", [])

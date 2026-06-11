@@ -3,6 +3,7 @@ services:
     image: brenak/kingshot-redeemer:latest
     container_name: sdw-redeemer-bot
     restart: unless-stopped
+    command: python -u main.py
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - TIMEOUT_MS=${TIMEOUT_MS}
