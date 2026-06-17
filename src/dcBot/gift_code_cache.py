@@ -88,6 +88,22 @@ class GiftCodeCacheManager:
                                             if player_id and player_id not in code_list:
                                                 code_list.append(player_id)
 
+                                # Send Discord notification
+                                try:
+                                    config = self.bot_data.get("botConfig", {})
+                                    channel_id = config.get("allowed_channel")
+                                    if channel_id:
+                                        channel = self.bot.get_channel(channel_id)
+                                        if channel:
+                                            codes_str = ", ".join([f"`{code}`" for code in new_codes])
+                                            await channel.send(
+                                                f"🎁 **New Gift Code{'s' if len(new_codes) > 1 else ''}!**\n"
+                                                f"{codes_str}\n"
+                                                f"Auto-redeemed for {len(players)} player{'s' if len(players) > 1 else ''}."
+                                            )
+                                except Exception as e:
+                                    print(f"⚠️ Could not send gift code notification: {e}")
+
                         self.save_data(self.bot_data)
                         print(f"✅ Gift code cache updated. Found {len(gift_codes)} code(s), {len(new_codes)} new")
                     else:
