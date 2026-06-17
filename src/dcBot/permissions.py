@@ -41,8 +41,19 @@ def check_permissions(interaction: discord.Interaction, bot_data: Dict[str, Any]
     bot_config = bot_data.get("botConfig", {})
     admin_role_id = bot_config.get("admin_role")
 
-    admin_role = discord.utils.get(interaction.guild.roles, id=admin_role_id)
-    if not admin_role or admin_role not in interaction.user.roles:
+    # Use the raw role IDs from the interaction payload (_roles is a SnowflakeList
+    # populated directly from Discord's data, not from the guild cache).  This
+    # avoids the failure mode where discord.utils.get(guild.roles, ...) returns
+    # None because the guild cache is stale or not yet fully populated, which
+    # caused every non-@everyone role check to silently fail for everyone.
+    member = interaction.user
+    user_role_ids = set(getattr(member, "_roles", []))
+    # @everyone has id == guild.id and is always implicit; add it so that
+    # configuring @everyone as the admin role continues to work.
+    if interaction.guild:
+        user_role_ids.add(interaction.guild.id)
+
+    if admin_role_id not in user_role_ids:
         return "You do not have the required role to use this command."
 
     return ""
