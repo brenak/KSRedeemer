@@ -67,25 +67,42 @@ class GiftCodeCacheManager:
                     return None
                 html = await response.text()
 
-            # Find the "Active Codes" heading then the first <ul> after it
-            match = re.search(
-                r'Active\s+Codes.*?<ul[^>]*>(.*?)</ul>',
-                html,
-                re.DOTALL | re.IGNORECASE,
-            )
-            if not match:
-                print("⚠️ Could not find 'Active Codes' section on wiki page")
+            # Step 1: find the heading whose TEXT CONTENT is "Active Codes".
+            # Checking text content (not raw HTML) avoids matching TOC anchor links
+            # like <a href="#active-codes">Active Codes</a> that appear earlier in
+            # the page and would otherwise make the regex grab the nav menu <ul>.
+            heading_re = re.compile(r'<h[1-6][^>]*>(.*?)</h[1-6]>', re.DOTALL | re.IGNORECASE)
+            active_codes_pos = None
+            for m in heading_re.finditer(html):
+                heading_text = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                if 'active codes' in heading_text.lower():
+                    active_codes_pos = m.end()
+                    break
+
+            if active_codes_pos is None:
+                print("⚠️ Could not find 'Active Codes' heading on wiki page")
                 return []
 
-            ul_html = match.group(1)
+            # Step 2: find the first <ul> after that heading position
+            ul_match = re.search(
+                r'<ul[^>]*>(.*?)</ul>',
+                html[active_codes_pos:],
+                re.DOTALL | re.IGNORECASE,
+            )
+            if not ul_match:
+                print("⚠️ No list found after 'Active Codes' heading on wiki page")
+                return []
+
+            ul_html = ul_match.group(1)
             items = re.findall(r'<li[^>]*>(.*?)</li>', ul_html, re.DOTALL)
             codes = []
             for item in items:
-                # Strip inner HTML tags (copy buttons etc.) then trim whitespace
-                text = re.sub(r'<[^>]+>', '', item).strip()
-                # Validate: alphanumeric only, 3–30 chars (covers all known code formats)
-                if text and re.fullmatch(r'[A-Za-z0-9]{3,30}', text):
-                    codes.append(text)
+                # Strip inner HTML tags, then take the first whitespace-delimited
+                # token — this drops any trailing "Copy" button text etc.
+                text = re.sub(r'<[^>]+>', '', item)
+                first_token = text.split()[0] if text.split() else ""
+                if first_token and re.fullmatch(r'[A-Za-z0-9]{3,30}', first_token):
+                    codes.append(first_token)
 
             return codes
 
