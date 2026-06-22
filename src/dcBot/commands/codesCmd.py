@@ -43,7 +43,9 @@ def register_codes_command(
             codes_text = ""
             for code, data in valid_codes:
                 expires = data.get("expires") or "Never"
-                codes_text += f"✅ `{code}`\n   Expires: {expires}\n"
+                source = data.get("source", "api")
+                source_label = "🌐 API" if source == "api" else "📖 Wiki"
+                codes_text += f"✅ `{code}` — {source_label}\n   Expires: {expires}\n"
 
             embed.add_field(
                 name=f"Active Codes ({len(valid_codes)})",
