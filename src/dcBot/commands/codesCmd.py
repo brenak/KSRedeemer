@@ -51,7 +51,8 @@ def register_codes_command(
                 inline=False,
             )
 
-            embed.set_footer(text=f"Cache updated every 6 hours")
+            interval = bot_data.get("botConfig", {}).get("gift_code_check_interval_hours") or 1
+            embed.set_footer(text=f"Cache updated every {interval} hour(s)")
 
             await interaction.followup.send(embed=embed)
 
