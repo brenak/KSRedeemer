@@ -80,7 +80,11 @@ async def redeem_giftcode_for_all_players(players: List[Dict[str, str]], gift_co
                 })
                 return results
 
-            elif result_message == "The same Gift Code type can only be redeemed once!" or result_message == "Already claimed, unable to claim again.":
+            elif result_message in (
+                "The same Gift Code type can only be redeemed once!",
+                "Already claimed, unable to claim again.",
+                "Claim limit reached, unable to claim.",
+            ):
                 results.append({
                     "player_id": player_id,
                     "stored_player_nick": stored_nick,
