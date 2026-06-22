@@ -2,17 +2,6 @@
 
 A Discord bot that automates gift code redemption for Kingshot players using browser automation. Redeem codes for multiple accounts simultaneously with a single command.
 
-# IMPORTANT Backup Your Data!
-The migration in 1.1.0 update has a major oversight for docker volumes. Please backup your data NOW to avoid data loss.
-
-```bash
-# Export bot data from a running container
-## Version 1.1.0
-docker cp kingshot-redeemer:/data/botData.json ./botData.json
-
-## Version 1.0.0
-docker cp kingshot-redeemer:/app/data/players.json ./players.json
-```
 
 ## Features
 
@@ -128,10 +117,12 @@ docker-compose logs -f
 |---------|-------------|----------|
 | `/setup <channel> <role>` | Configure update notifications channel and admin role | `/setup #my-channel @KingshotAdmin` |
 | `/redeem <gift_code>` | Redeem a gift code for all registered players | `/redeem KSFB15K` |
-| `/add <player_id>` | Add a new player by their Kingshot ID | `/add 123456789` |
+| `/add <player_id>` | Add a new player and auto-redeem all active codes for them | `/add 123456789` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
 | `/find <query>` | Search for a player by ID or nickname | `/find 123456789` |
+| `/codes` | List all currently active gift codes and their source (API/Wiki) | `/codes` |
+| `/catchup [player_id]` | Redeem any active codes a player (or all players) haven't received yet | `/catchup` |
 | `/set-check-interval <hours>` | Set how often the bot checks for new gift codes (min 1 hour) | `/set-check-interval 2` |
 | `/help` | Display all available commands and usage | `/help` |
 
@@ -143,12 +134,67 @@ docker-compose logs -f
 | `TIMEOUT_MS` | ❌ No | `500` | Browser automation timeout in milliseconds |
 | `GIFT_CODE_CHECK_INTERVAL_HOURS` | ❌ No | `1` | How often (in hours) to check for new gift codes. Minimum 1. Can also be changed at runtime with `/set-check-interval` without redeploying. |
 
-## Data Persistence
+## Data Persistence & Backup
 
-Bot data (including players and configuration) is stored in `/app/data/botData.json` inside the container. The Docker volume `kingshot-data` ensures your data persists across:
-- Container restarts
-- Bot updates
-- System reboots
+Bot data (players, redeemed codes, config) is stored in `/app/data/botData.json` inside the container. The Docker volume `kingshot-data` ensures your data persists across container restarts, image updates, and reboots.
+
+### Automated backups
+
+`backup.sh` copies `botData.json` from the running container to a timestamped file on the host. Set it up once with crontab:
+
+```bash
+# Make scripts executable (one-time setup)
+chmod +x /home/ubuntu/sdw-redeemer/backup.sh
+chmod +x /home/ubuntu/sdw-redeemer/restore.sh
+
+# Open your crontab
+crontab -e
+```
+
+Add this line to run a backup every day at 2 AM:
+
+```
+0 2 * * * /home/ubuntu/sdw-redeemer/backup.sh
+```
+
+Backups are saved to `/home/ubuntu/sdw-redeemer/backup/botData_YYYYMMDD_HHMMSS.json`.
+
+### Manual backup
+
+```bash
+/home/ubuntu/sdw-redeemer/backup.sh
+```
+
+### Restore
+
+```bash
+# Restore the most recent backup
+/home/ubuntu/sdw-redeemer/restore.sh
+
+# Restore a specific backup by filename
+/home/ubuntu/sdw-redeemer/restore.sh botData_20260622_021500.json
+
+# Restore from an absolute path
+/home/ubuntu/sdw-redeemer/restore.sh /home/ubuntu/sdw-redeemer/backup/botData_20260622_021500.json
+```
+
+`restore.sh` copies the file into the container and restarts it so the bot picks up the changes immediately.
+
+### Manually editing botData.json
+
+If you need to edit the data directly (e.g. to pre-populate `redeemed_codes` for a code):
+
+```bash
+# 1. Copy the file out
+docker cp sdw-redeemer-bot:/app/data/botData.json ./botData_edit.json
+
+# 2. Edit it (fill in any redeemed_codes arrays, fix player entries, etc.)
+nano ./botData_edit.json
+
+# 3. Copy it back and restart
+docker cp ./botData_edit.json sdw-redeemer-bot:/app/data/botData.json
+docker restart sdw-redeemer-bot
+```
 
 
 
