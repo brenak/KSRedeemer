@@ -172,18 +172,91 @@ Nicknames auto-update when:
 - The game page returns a valid player name
 - The stored name differs from the page name
 
-## Building from Source
+## Building & Deploying Your Own Image
+
+Use this workflow when you want to build from source, push to your own Docker Hub repository, and then pull and run on a remote server.
+
+### 1. Log in to Docker Hub
 
 ```bash
-# Clone the repository
-git clone https://github.com/JareCoder/KingshotRedeemer.git
-cd KingshotRedeemer
+docker login
+# Enter your Docker Hub username and password when prompted
+```
 
-# Build the Docker image
-docker build -t kingshot-redeemer .
+### 2. Build the Image
 
-# Run it
+**Single-platform (current machine architecture):**
+
+```bash
+docker build -t brenak/kingshot-redeemer:latest .
+```
+
+**Multi-platform (AMD64 + ARM64) using buildx — recommended if deploying to a different architecture:**
+
+```bash
+# One-time setup: create a multi-platform builder (skip if already done)
+docker buildx create --name multibuilder --use
+
+# Build and push directly to Docker Hub in one step
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t brenak/kingshot-redeemer:latest \
+  --push \
+  .
+```
+
+### 3. Push to Docker Hub (single-platform only)
+
+If you used the plain `docker build` above (not `buildx --push`), push the image separately:
+
+```bash
+docker push brenak/kingshot-redeemer:latest
+```
+
+### 4. Pull and Run on a Remote Server
+
+SSH into your server, then:
+
+```bash
+docker pull brenak/kingshot-redeemer:latest
+```
+
+**Option A — Docker Compose (recommended):**
+
+Copy your `docker-compose.yml` and `.env` file to the server, then:
+
+```bash
 docker-compose up -d
+docker-compose logs -f   # verify it started cleanly
+```
+
+**Option B — Docker Run:**
+
+```bash
+docker run -d \
+  --name sdw-redeemer-bot \
+  --restart unless-stopped \
+  -e DISCORD_TOKEN=your_discord_token_here \
+  -e TIMEOUT_MS=500 \
+  -v kingshot-data:/app/data \
+  brenak/kingshot-redeemer:latest
+```
+
+### Updating to a New Build
+
+On the remote server, pull the latest image and recreate the container (your volume data is preserved):
+
+```bash
+docker-compose pull
+docker-compose up -d --force-recreate
+```
+
+Or with plain Docker:
+
+```bash
+docker pull brenak/kingshot-redeemer:latest
+docker stop sdw-redeemer-bot && docker rm sdw-redeemer-bot
+# re-run the docker run command above
 ```
 
 ## Supported Platforms
