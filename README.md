@@ -132,6 +132,7 @@ docker-compose logs -f
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
 | `/find <query>` | Search for a player by ID or nickname | `/find 123456789` |
+| `/set-check-interval <hours>` | Set how often the bot checks for new gift codes (min 1 hour) | `/set-check-interval 2` |
 | `/help` | Display all available commands and usage | `/help` |
 
 ## Environment Variables
@@ -140,6 +141,7 @@ docker-compose logs -f
 |----------|----------|---------|-------------|
 | `DISCORD_TOKEN` | ✅ Yes | - | Your Discord bot token from the Developer Portal |
 | `TIMEOUT_MS` | ❌ No | `500` | Browser automation timeout in milliseconds |
+| `GIFT_CODE_CHECK_INTERVAL_HOURS` | ❌ No | `1` | How often (in hours) to check for new gift codes. Minimum 1. Can also be changed at runtime with `/set-check-interval` without redeploying. |
 
 ## Data Persistence
 

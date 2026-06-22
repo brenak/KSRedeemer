@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, Any, Callable
 
 from browser_automation.redeem import redeem_giftcode_for_all_players
+from config.config import GIFT_CODE_CHECK_INTERVAL_HOURS
 
 
 class GiftCodeCacheManager:
@@ -15,7 +16,24 @@ class GiftCodeCacheManager:
         self.bot_data = bot_data
         self.save_data = save_data_func
         self.api_url = "https://kingshot.net/api/gift-codes"
+
+        self.check_codes.change_interval(hours=self._get_stored_interval())
         self.check_codes.start()
+
+    def _get_stored_interval(self) -> int:
+        config = self.bot_data.get("botConfig", {})
+        stored = config.get("gift_code_check_interval_hours")
+        if stored is not None:
+            return max(1, int(stored))
+        return GIFT_CODE_CHECK_INTERVAL_HOURS
+
+    def set_interval(self, hours: int) -> None:
+        hours = max(1, int(hours))
+        if "botConfig" not in self.bot_data:
+            self.bot_data["botConfig"] = {}
+        self.bot_data["botConfig"]["gift_code_check_interval_hours"] = hours
+        self.save_data(self.bot_data)
+        self.check_codes.change_interval(hours=hours)
 
     def unload(self):
         self.check_codes.cancel()
@@ -30,7 +48,7 @@ class GiftCodeCacheManager:
         except (ValueError, AttributeError):
             return False
 
-    @tasks.loop(hours=6)
+    @tasks.loop(hours=1)
     async def check_codes(self):
         try:
             async with aiohttp.ClientSession() as session:
