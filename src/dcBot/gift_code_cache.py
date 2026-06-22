@@ -56,6 +56,12 @@ class GiftCodeCacheManager:
         Scrape active codes from the wiki gift code page.
         Returns a list of code strings on success, or None if the fetch failed
         (so callers can distinguish "no codes listed" from "fetch error").
+
+        Page structure (as of 2026-06):
+          <p><strong>Active Codes:</strong></p>   <- NOT a heading tag
+          <ul>...<ul>...<ul>...<ul>
+            <li><span class="code">CODENAME</span><button>Copy</button></li>
+        Codes live in <span class="code">, not in <h> tags.
         """
         try:
             async with session.get(
@@ -67,42 +73,33 @@ class GiftCodeCacheManager:
                     return None
                 html = await response.text()
 
-            # Step 1: find the heading whose TEXT CONTENT is "Active Codes".
-            # Checking text content (not raw HTML) avoids matching TOC anchor links
-            # like <a href="#active-codes">Active Codes</a> that appear earlier in
-            # the page and would otherwise make the regex grab the nav menu <ul>.
-            heading_re = re.compile(r'<h[1-6][^>]*>(.*?)</h[1-6]>', re.DOTALL | re.IGNORECASE)
-            active_codes_pos = None
-            for m in heading_re.finditer(html):
-                heading_text = re.sub(r'<[^>]+>', '', m.group(1)).strip()
-                if 'active codes' in heading_text.lower():
-                    active_codes_pos = m.end()
-                    break
+            # Skip <head> to avoid matching "Active Codes" inside meta description tags
+            body_start = html.lower().find('<body')
+            search_html = html[body_start:] if body_start != -1 else html
 
-            if active_codes_pos is None:
-                print("⚠️ Could not find 'Active Codes' heading on wiki page")
+            # Find the "Active Codes:" label in the page body
+            section_match = re.search(r'Active\s+Codes\s*:', search_html, re.IGNORECASE)
+            if not section_match:
+                print("⚠️ Could not find 'Active Codes' section on wiki page")
                 return []
 
-            # Step 2: find the first <ul> after that heading position
-            ul_match = re.search(
-                r'<ul[^>]*>(.*?)</ul>',
-                html[active_codes_pos:],
+            # Bound the window to avoid spilling into other sections (e.g. Concierge codes)
+            section_html = search_html[section_match.start():]
+            stop = re.search(r'Concierge|<h[1-6][^>]*>', section_html, re.IGNORECASE)
+            if stop:
+                section_html = section_html[:stop.start()]
+
+            # Codes are in <span class="code">
+            raw = re.findall(
+                r'<span[^>]+class=["\']code["\'][^>]*>(.*?)</span>',
+                section_html,
                 re.DOTALL | re.IGNORECASE,
             )
-            if not ul_match:
-                print("⚠️ No list found after 'Active Codes' heading on wiki page")
-                return []
-
-            ul_html = ul_match.group(1)
-            items = re.findall(r'<li[^>]*>(.*?)</li>', ul_html, re.DOTALL)
             codes = []
-            for item in items:
-                # Strip inner HTML tags, then take the first whitespace-delimited
-                # token — this drops any trailing "Copy" button text etc.
-                text = re.sub(r'<[^>]+>', '', item)
-                first_token = text.split()[0] if text.split() else ""
-                if first_token and re.fullmatch(r'[A-Za-z0-9]{3,30}', first_token):
-                    codes.append(first_token)
+            for item in raw:
+                text = re.sub(r'<[^>]+>', '', item).strip()
+                if text and re.fullmatch(r'[A-Za-z0-9]{3,30}', text):
+                    codes.append(text)
 
             return codes
 
