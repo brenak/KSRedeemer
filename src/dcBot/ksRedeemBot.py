@@ -58,8 +58,10 @@ def init_bot(token: str) -> discord.Client:
 
     @client.event
     async def on_ready():
-        await tree.sync()
-        print(f"✅ Logged in as {client.user}")
+        guild = discord.Object(id=1482088126640947483)
+        tree.copy_global_to(guild=guild)
+        await tree.sync(guild=guild)
+        print(f"✅ Logged in as {client.user} · commands synced")
     
     return client
 
