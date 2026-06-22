@@ -21,7 +21,7 @@ async def perform_giftcode_redeem(player_id: str, gift_code: str, page: Any) -> 
         pass
 
     player_nick = await page.inner_text("p.name")
-    print("Trying to redeem for player:", player_nick)
+    print(f"Trying to redeem [{gift_code}] for player: {player_nick}")
 
     await page.fill("input[placeholder='Enter Gift Code']", gift_code)
     await page.click("div.btn.exchange_btn")
