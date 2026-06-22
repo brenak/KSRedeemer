@@ -1,5 +1,6 @@
 import discord
 from discord import app_commands
+from datetime import datetime
 from typing import Callable, Dict, Any, Optional
 
 from browser_automation.redeem import redeem_giftcode_for_all_players
@@ -82,6 +83,19 @@ def register_redeem_command(
                 if error_code == "INVALID_CODE":
                     failed += 1
                     failed_players.append(f"❌ Invalid gift code.")
+                    break
+
+                if error_code == "EXPIRED":
+                    cache = bot_data.setdefault("gift_code_cache", {})
+                    cache[gift_code] = {
+                        **cache.get(gift_code, {}),
+                        "status": "invalid",
+                        "manually_expired": True,
+                        "last_checked": datetime.now().isoformat(),
+                    }
+                    save_bot_data(bot_data)
+                    failed += 1
+                    failed_players.append(f"⏰ Gift code `{gift_code}` has expired and has been removed from the active list.")
                     break
 
                 # Keep player nicknames synced for readability

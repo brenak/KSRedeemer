@@ -71,14 +71,16 @@ class GiftCodeCacheManager:
 
                             is_valid = self._is_code_valid(code_obj)
                             was_new = code not in cache
+                            is_manually_expired = cache.get(code, {}).get("manually_expired", False)
 
                             cache[code] = {
-                                "status": "valid" if is_valid else "invalid",
+                                "status": "invalid" if is_manually_expired else ("valid" if is_valid else "invalid"),
                                 "expires": code_obj.get("expiresAt"),
-                                "last_checked": current_time
+                                "last_checked": current_time,
+                                **({"manually_expired": True} if is_manually_expired else {}),
                             }
 
-                            if was_new and is_valid:
+                            if was_new and is_valid and not is_manually_expired:
                                 new_codes.append(code)
 
                         # Mark codes that disappeared from the API as invalid
@@ -100,7 +102,15 @@ class GiftCodeCacheManager:
 
                                     # Track successful redemptions and sync player nicknames
                                     code_list = redeemed_codes.setdefault(code, [])
+                                    expired_via_redeem = False
                                     for item in result or []:
+                                        if item.get("errorCode") == "EXPIRED":
+                                            cache[code]["status"] = "invalid"
+                                            cache[code]["manually_expired"] = True
+                                            print(f"⏰ Gift code [{code}] reported expired by game — marked invalid.")
+                                            expired_via_redeem = True
+                                            break
+
                                         if item.get("success"):
                                             player_id = item.get("player_id")
                                             if player_id and player_id not in code_list:

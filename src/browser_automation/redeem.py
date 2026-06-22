@@ -70,9 +70,16 @@ async def redeem_giftcode_for_all_players(players: List[Dict[str, str]], gift_co
                     "errorCode": "INVALID_CODE",
                     "message": "Invalid gift code.",
                 })
-
                 return results
-            
+
+            elif result_message == "Expired, unable to claim.":
+                results.append({
+                    "success": False,
+                    "errorCode": "EXPIRED",
+                    "message": "Gift code has expired.",
+                })
+                return results
+
             elif result_message == "The same Gift Code type can only be redeemed once!" or result_message == "Already claimed, unable to claim again.":
                 results.append({
                     "player_id": player_id,
