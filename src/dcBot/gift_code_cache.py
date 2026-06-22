@@ -199,10 +199,15 @@ class GiftCodeCacheManager:
 
                             code_list = redeemed_codes.setdefault(code, [])
                             for item in result or []:
-                                if item.get("errorCode") == "EXPIRED":
+                                error_code = item.get("errorCode", "")
+
+                                if error_code == "EXPIRED":
                                     cache[code]["status"] = "invalid"
                                     cache[code]["manually_expired"] = True
                                     print(f"⏰ Gift code [{code}] reported expired by game — marked invalid.")
+                                    break
+
+                                if error_code == "INVALID_CODE":
                                     break
 
                                 if item.get("success"):
@@ -219,6 +224,9 @@ class GiftCodeCacheManager:
                                     )
                                     if player_to_update and player_to_update.get("player_nick") != page_nick:
                                         player_to_update["player_nick"] = page_nick
+
+                            # Save after each code so a crash mid-loop doesn't lose progress
+                            self.save_data(self.bot_data)
 
                         # Send Discord notification
                         try:
