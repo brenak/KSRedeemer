@@ -1,5 +1,6 @@
 import discord
 from discord import app_commands
+from datetime import datetime
 from typing import Callable, Dict, Any
 import asyncio
 import random
@@ -50,6 +51,7 @@ def register_add_command(
 
             response_text = ""
             success_count = 0
+            expired_found = False
             redeemed_codes = bot_data.setdefault("redeemed_codes", {})
 
             if valid_codes:
@@ -61,6 +63,18 @@ def register_add_command(
                     # Extract player nickname from result if available
                     if result and len(result) > 0:
                         item = result[0]
+
+                        if item.get("errorCode") == "EXPIRED":
+                            cache = bot_data.setdefault("gift_code_cache", {})
+                            cache[code] = {
+                                **cache.get(code, {}),
+                                "status": "invalid",
+                                "manually_expired": True,
+                                "last_checked": datetime.now().isoformat(),
+                            }
+                            expired_found = True
+                            continue
+
                         if item.get("success"):
                             success_count += 1
                             # Track this redemption
@@ -74,8 +88,8 @@ def register_add_command(
 
                 response_text += f"✅ Auto-redeemed `{success_count}/{len(valid_codes)}` code(s)\n"
 
-                # Save updated player with any nickname changes and redemption tracking
-                if success_count > 0:
+                # Save updated player with any nickname changes, redemption tracking, and cache updates
+                if success_count > 0 or expired_found:
                     bot_data["players"] = players
                     bot_data["redeemed_codes"] = redeemed_codes
                     save_bot_data(bot_data)
