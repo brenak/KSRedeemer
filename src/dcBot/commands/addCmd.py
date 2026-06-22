@@ -51,7 +51,8 @@ def register_add_command(
 
             response_text = ""
             success_count = 0
-            expired_found = False
+            expired_codes = []
+            failed_codes = []
             redeemed_codes = bot_data.setdefault("redeemed_codes", {})
 
             if valid_codes:
@@ -72,7 +73,7 @@ def register_add_command(
                                 "manually_expired": True,
                                 "last_checked": datetime.now().isoformat(),
                             }
-                            expired_found = True
+                            expired_codes.append(code)
                             continue
 
                         if item.get("success"):
@@ -85,11 +86,20 @@ def register_add_command(
                             page_nick = item.get("page_player_nick")
                             if page_nick and new_player.get("player_nick") != page_nick:
                                 new_player["player_nick"] = page_nick
+                        else:
+                            message = item.get("result", {}).get("message") or item.get("message", "Unknown error")
+                            failed_codes.append(f"`{code}`: {message}")
 
                 response_text += f"✅ Auto-redeemed `{success_count}/{len(valid_codes)}` code(s)\n"
+                if expired_codes:
+                    response_text += "⏰ Expired (removed from active list):\n"
+                    response_text += "\n".join(f"  • `{c}`" for c in expired_codes) + "\n"
+                if failed_codes:
+                    response_text += "❌ Failed:\n"
+                    response_text += "\n".join(f"  • {f}" for f in failed_codes) + "\n"
 
                 # Save updated player with any nickname changes, redemption tracking, and cache updates
-                if success_count > 0 or expired_found:
+                if success_count > 0 or expired_codes:
                     bot_data["players"] = players
                     bot_data["redeemed_codes"] = redeemed_codes
                     save_bot_data(bot_data)
