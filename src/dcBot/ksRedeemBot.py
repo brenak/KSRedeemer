@@ -15,6 +15,7 @@ from dcBot.commands.setCheckIntervalCmd import register_set_check_interval_comma
 from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
 from dcBot.gift_code_cache import GiftCodeCacheManager
+from dcBot.add_queue import AddQueue
 
 
 def load_bot_data_with_players():
@@ -37,11 +38,12 @@ def init_bot(token: str) -> discord.Client:
     tree = app_commands.CommandTree(client)
 
     bot_data = load_bot_data_with_players()
+    add_queue = AddQueue()
 
     # Register commands
     register_redeem_command(tree, bot_data, save_bot_data_with_players)
     register_list_command(tree, bot_data)
-    register_add_command(tree, bot_data, save_bot_data_with_players)
+    register_add_command(tree, bot_data, save_bot_data_with_players, add_queue)
     register_remove_command(tree, bot_data, save_bot_data_with_players)
     register_find_command(tree, bot_data)
     register_help_command(tree, bot_data)
@@ -58,6 +60,7 @@ def init_bot(token: str) -> discord.Client:
 
     @client.event
     async def on_ready():
+        add_queue.start()
         guild = discord.Object(id=1482088126640947483)
         tree.copy_global_to(guild=guild)
         await tree.sync(guild=guild)
