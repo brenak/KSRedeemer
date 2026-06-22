@@ -12,6 +12,7 @@ from dcBot.commands.helpCmd import register_help_command  # noqa: E402
 from dcBot.commands.codesCmd import register_codes_command  # noqa: E402
 from dcBot.commands.setupCmd import register_setup_command
 from dcBot.commands.setCheckIntervalCmd import register_set_check_interval_command
+from dcBot.commands.catchupCmd import register_catchup_command
 from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
 from dcBot.gift_code_cache import GiftCodeCacheManager
@@ -57,6 +58,7 @@ def init_bot(token: str) -> discord.Client:
     cache_manager = GiftCodeCacheManager(client, bot_data, save_bot_data_with_players)
     client.gift_code_cache = cache_manager
     register_set_check_interval_command(tree, bot_data, cache_manager)
+    register_catchup_command(tree, bot_data, save_bot_data_with_players, add_queue)
 
     @client.event
     async def on_ready():
