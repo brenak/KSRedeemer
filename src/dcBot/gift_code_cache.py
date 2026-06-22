@@ -80,13 +80,23 @@ class GiftCodeCacheManager:
                                     await asyncio.sleep(random.uniform(5, 10))
                                     result = await redeem_giftcode_for_all_players(players, code)
 
-                                    # Track successful redemptions
+                                    # Track successful redemptions and sync player nicknames
                                     code_list = redeemed_codes.setdefault(code, [])
                                     for item in result or []:
                                         if item.get("success"):
                                             player_id = item.get("player_id")
                                             if player_id and player_id not in code_list:
                                                 code_list.append(player_id)
+
+                                        page_nick = item.get("page_player_nick")
+                                        item_player_id = item.get("player_id")
+                                        if page_nick and item_player_id:
+                                            player_to_update = next(
+                                                (p for p in players if p.get("player_id") == item_player_id),
+                                                None,
+                                            )
+                                            if player_to_update and player_to_update.get("player_nick") != page_nick:
+                                                player_to_update["player_nick"] = page_nick
 
                                 # Send Discord notification
                                 try:
