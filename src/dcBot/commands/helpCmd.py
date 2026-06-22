@@ -96,8 +96,30 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                 value=(
                     "View all currently active gift codes.\n"
                     "• Shows codes that are valid and not expired\n"
-                    "• Displays expiration dates\n"
-                    "• Updates every 6 hours"
+                    "• Shows source (API or Wiki) for each code\n"
+                    "• Displays expiration dates"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="🔁 /catchup [player_id]",
+                value=(
+                    "Redeem any active codes a player hasn't received yet.\n"
+                    "• Omit `player_id` to catch up all players\n"
+                    "• Queued behind any in-progress `/add` requests\n"
+                    "• Reports per-code results and marks expired codes\n"
+                    "• Requires bot admin permissions"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="⏱️ /set-check-interval <hours>",
+                value=(
+                    "Set how often the bot checks for new gift codes (minimum 1 hour).\n"
+                    "• Takes effect immediately without a redeploy\n"
+                    "• Requires bot admin permissions"
                 ),
                 inline=False,
             )
