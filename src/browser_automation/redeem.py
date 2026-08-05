@@ -4,6 +4,17 @@ from config.config import TIMEOUT_MS
 
 DEFAULT_KINGDOM = "1259"
 
+# Known success-modal phrasings. The page redesign changed this text from
+# "Redeemed, please claim the rewards in your mail!" to "Redeemed
+# successfully. Please check your mail for rewards!" without the rest of the
+# redemption flow changing -- a stale check here misclassifies genuine
+# successes as failures. Keeping both so a stale check doesn't silently
+# regress again if the wording reverts or varies.
+SUCCESS_PHRASES = (
+    "redeemed successfully. please check your mail for rewards!",
+    "redeemed, please claim the rewards in your mail!",
+)
+
 async def perform_giftcode_redeem(player_id: str, kingdom: str, gift_code: str, page: Any) -> Dict[str, Any]:
     print(f"Trying to redeem [{gift_code}] for player: {player_id} (kingdom {kingdom})")
 
@@ -20,8 +31,9 @@ async def perform_giftcode_redeem(player_id: str, kingdom: str, gift_code: str, 
 
         await page.click("div.confirm_btn")
 
+        modal_lower = modal_text.lower()
         return {
-            "success": "Redeemed, please claim the rewards in your mail!".lower() in modal_text.lower(),
+            "success": any(phrase in modal_lower for phrase in SUCCESS_PHRASES),
             "message": modal_text,
         }
     except (PlaywrightTimeoutError, TimeoutError):
