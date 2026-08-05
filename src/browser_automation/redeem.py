@@ -15,6 +15,15 @@ SUCCESS_PHRASES = (
     "redeemed, please claim the rewards in your mail!",
 )
 
+# Budget for the server round-trip after Confirm, separate from TIMEOUT_MS
+# (which is meant for brief UI-settle pauses, not network/redemption
+# latency). TIMEOUT_MS*5 (2.5s at the default 500ms) was observed too tight
+# for real redemptions -- a throwaway player gets a fast client-side reject
+# in under a second, but a genuine redemption (server validates player +
+# kingdom + code and writes to mail) can take longer, and some codes (e.g.
+# VIP-tier) may need extra server-side checks on top of that.
+MODAL_WAIT_MS = 15000
+
 async def perform_giftcode_redeem(player_id: str, kingdom: str, gift_code: str, page: Any) -> Dict[str, Any]:
     print(f"Trying to redeem [{gift_code}] for player: {player_id} (kingdom {kingdom})")
 
@@ -25,7 +34,7 @@ async def perform_giftcode_redeem(player_id: str, kingdom: str, gift_code: str, 
     await page.wait_for_timeout(TIMEOUT_MS)
 
     try:
-        await page.wait_for_selector("div.message_modal", timeout=TIMEOUT_MS*5)
+        await page.wait_for_selector("div.message_modal", timeout=MODAL_WAIT_MS)
         modal_text = await page.inner_text("div.modal_content .msg", timeout=TIMEOUT_MS)
         print("Redemption result:", modal_text)
 
