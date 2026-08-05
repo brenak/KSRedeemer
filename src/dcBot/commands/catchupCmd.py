@@ -87,7 +87,6 @@ def register_catchup_command(
                 redeemed = bot_data.setdefault("redeemed_codes", {})
                 expired_codes = []
                 code_results = []  # [(code, succeeded, failed_msgs)]
-                nick_updated = False
 
                 for code, players in pending.items():
                     await asyncio.sleep(random.uniform(5, 10))
@@ -122,17 +121,8 @@ def register_catchup_command(
                                 code_list.append(pid)
                         else:
                             msg = item.get("result", {}).get("message") or item.get("message", "Unknown error")
-                            nick = item.get("result", {}).get("player_nick") or pid or "?"
+                            nick = item.get("stored_player_nick") or pid or "?"
                             failed_msgs.append(f"`{nick}`: {msg}")
-
-                        page_nick = item.get("page_player_nick")
-                        if page_nick and pid:
-                            player_obj = next(
-                                (p for p in all_players if p.get("player_id") == pid), None
-                            )
-                            if player_obj and player_obj.get("player_nick") != page_nick:
-                                player_obj["player_nick"] = page_nick
-                                nick_updated = True
 
                     if code not in expired_codes:
                         code_results.append((code, succeeded, failed_msgs))
@@ -157,9 +147,6 @@ def register_catchup_command(
 
                 for code in expired_codes:
                     lines.append(f"⏰ `{code}` — expired, removed from active list")
-
-                if nick_updated:
-                    lines.append("\n💾 Updated player name(s) from game page")
 
                 response = "\n".join(lines)
                 if len(response) > 1900:

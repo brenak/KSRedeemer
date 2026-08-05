@@ -215,16 +215,6 @@ class GiftCodeCacheManager:
                                     if player_id and player_id not in code_list:
                                         code_list.append(player_id)
 
-                                page_nick = item.get("page_player_nick")
-                                item_player_id = item.get("player_id")
-                                if page_nick and item_player_id:
-                                    player_to_update = next(
-                                        (p for p in players if p.get("player_id") == item_player_id),
-                                        None,
-                                    )
-                                    if player_to_update and player_to_update.get("player_nick") != page_nick:
-                                        player_to_update["player_nick"] = page_nick
-
                             # Save after each code so a crash mid-loop doesn't lose progress
                             self.save_data(self.bot_data)
 

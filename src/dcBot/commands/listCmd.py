@@ -3,6 +3,7 @@ from discord import app_commands
 from typing import List, Dict, Any
 
 from dcBot.permissions import check_channel_only
+from browser_automation.redeem import DEFAULT_KINGDOM
 
 
 class PlayerListView(discord.ui.View):
@@ -32,9 +33,10 @@ class PlayerListView(discord.ui.View):
         for player in page_players:
             player_id = player.get("player_id", "Unknown")
             player_nick = player.get("player_nick", "N/A")
+            kingdom = player.get("kingdom", DEFAULT_KINGDOM)
             embed.add_field(
                 name=f"{player_nick}",
-                value=f"ID: `{player_id}`",
+                value=f"ID: `{player_id}` · Kingdom: `{kingdom}`",
                 inline=False,
             )
 

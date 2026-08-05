@@ -74,7 +74,6 @@ def register_redeem_command(
 
             results = await redeem_giftcode_for_all_players(players_to_redeem, gift_code)
             failed = 0
-            nick_updated = False
             new_redemptions = []
 
             failed_players = []
@@ -98,19 +97,7 @@ def register_redeem_command(
                     failed_players.append(f"⏰ Gift code `{gift_code}` has expired and has been removed from the active list.")
                     break
 
-                # Keep player nicknames synced for readability
-                page_nick = item.get("page_player_nick")
                 redeemed_player_id = item.get("player_id")
-
-                # Find the player in the main list to update their nick
-                player_to_update = next(
-                    (p for p in all_players if p.get("player_id") == redeemed_player_id),
-                    None,
-                )
-
-                if player_to_update and page_nick and player_to_update.get("player_nick") != page_nick:
-                    player_to_update["player_nick"] = page_nick
-                    nick_updated = True
 
                 success = item.get("success")
                 if success:
@@ -120,7 +107,7 @@ def register_redeem_command(
 
                 result = item.get("result", {})
                 res_player_id = item.get("player_id", "Unknown")
-                res_player_nick = result.get("player_nick", "N/A")
+                res_player_nick = item.get("stored_player_nick", "N/A")
                 message = result.get("message", "No message")
                 failed += 1
 
@@ -132,7 +119,7 @@ def register_redeem_command(
                     if pid not in code_list:
                         code_list.append(pid)
 
-            if nick_updated or new_redemptions:
+            if new_redemptions:
                 bot_data["players"] = all_players
                 save_bot_data(bot_data)
 
@@ -146,8 +133,6 @@ def register_redeem_command(
             response_message += "\n".join(failed_players)
 
             footer_parts = []
-            if nick_updated:
-                footer_parts.append("Updated player names from Kingshot page")
             if new_redemptions:
                 footer_parts.append(f"Recorded {len(new_redemptions)} new redemption(s)")
             if footer_parts:

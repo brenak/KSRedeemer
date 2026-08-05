@@ -3,6 +3,7 @@ from discord import app_commands
 from typing import List, Dict, Any
 
 from dcBot.permissions import check_channel_only
+from browser_automation.redeem import DEFAULT_KINGDOM
 
 
 def register_find_command(
@@ -47,9 +48,10 @@ def register_find_command(
             for p in matches[:10]:
                 player_id = p.get("player_id", "Unknown")
                 player_nick = p.get("player_nick", "N/A")
+                kingdom = p.get("kingdom", DEFAULT_KINGDOM)
                 embed.add_field(
                     name=player_nick,
-                    value=f"ID: `{player_id}`",
+                    value=f"ID: `{player_id}` · Kingdom: `{kingdom}`",
                     inline=False,
                 )
 

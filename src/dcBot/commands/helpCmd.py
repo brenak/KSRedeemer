@@ -36,7 +36,6 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                 value=(
                     "Redeem a Kingshot gift code for all players or a single player ID.\n"
                     "**Examples:** `/redeem KSFB15K` or `/redeem KSFB15K 48666532`\n"
-                    "• Updates player nicknames from the game\n"
                     "• Shows success/failure for each player\n"
                     "• Requires bot admin permissions"
                 ),
@@ -44,13 +43,23 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
             )
 
             embed.add_field(
-                name="➕ /add <player_id>",
+                name="➕ /add <player_id> [kingdom]",
                 value=(
                     "Add a new player to the redemption list.\n"
-                    "**Example:** `/add 48666532`\n"
+                    "**Examples:** `/add 48666532` or `/add 48666532 1259`\n"
                     "• Checks if player already exists\n"
+                    "• Kingdom defaults to `1259` if omitted\n"
                     "• Creates placeholder nickname\n"
-                    "• Nickname auto-updates on first redemption"
+                    "• Requires bot admin permissions"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="🏰 /setkingdom <player_id> <kingdom>",
+                value=(
+                    "Update a player's kingdom number (e.g. after they migrate).\n"
+                    "**Example:** `/setkingdom 48666532 1300`\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -74,7 +83,7 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "View all registered players with pagination.\n"
                     "• Shows 10 players per page\n"
                     "• Navigate with ◀️ Previous / Next ▶️ buttons\n"
-                    "• Displays player nicknames and IDs"
+                    "• Displays player nicknames, IDs, and kingdoms"
                 ),
                 inline=False,
             )
@@ -141,7 +150,7 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
             )
 
             embed.set_footer(
-                text="💡 Tip: Player data persists across bot restarts • Nicknames auto-sync from the game"
+                text="💡 Tip: Player data persists across bot restarts"
             )
 
             await interaction.followup.send(embed=embed)

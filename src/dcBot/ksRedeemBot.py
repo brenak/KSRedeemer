@@ -13,6 +13,7 @@ from dcBot.commands.codesCmd import register_codes_command  # noqa: E402
 from dcBot.commands.setupCmd import register_setup_command
 from dcBot.commands.setCheckIntervalCmd import register_set_check_interval_command
 from dcBot.commands.catchupCmd import register_catchup_command
+from dcBot.commands.setKingdomCmd import register_set_kingdom_command
 from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
 from dcBot.gift_code_cache import GiftCodeCacheManager
@@ -46,6 +47,7 @@ def init_bot(token: str) -> discord.Client:
     register_list_command(tree, bot_data)
     register_add_command(tree, bot_data, save_bot_data_with_players, add_queue)
     register_remove_command(tree, bot_data, save_bot_data_with_players)
+    register_set_kingdom_command(tree, bot_data, save_bot_data_with_players)
     register_find_command(tree, bot_data)
     register_help_command(tree, bot_data)
     register_codes_command(tree, bot_data)
