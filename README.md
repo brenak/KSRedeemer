@@ -1,12 +1,12 @@
 # Kingshot Redeemer Bot
 
-A Discord bot that automates gift code redemption for Kingshot players using browser automation. Redeem codes for multiple accounts simultaneously with a single command.
+A Discord bot that automates gift code redemption for Kingshot players by calling the same signed API the official redemption page uses. Redeem codes for multiple accounts simultaneously with a single command.
 
 
 ## Features
 
 - 🎁 **Bulk Redemption** - Redeem gift codes for all registered players at once
-- 🤖 **Browser Automation** - Uses Playwright for reliable web interaction
+- ⚡ **Direct API** - Calls Kingshot's gift-code API directly (no browser automation)
 - 💾 **Auto-Sync Player Names** - Kingdom 1259 player nicknames are looked up from kingshot_web on add and refreshed on every `/redeem`/`/catchup`/auto-redeem; other kingdoms can be manually tagged with `/setname`
 - 📋 **Player Management** - Add, remove, search, and list players
 - 🔄 **Auto-Update Check** - Automatically checks for new Docker image versions every 24h
@@ -28,7 +28,6 @@ A Discord bot that automates gift code redemption for Kingshot players using bro
 docker run -d \
   --name kingshot-redeemer \
   -e DISCORD_TOKEN=your_discord_token_here \
-  -e TIMEOUT_MS=500 \
   -v kingshot-data:/data \
   --restart unless-stopped \
   jarecoder/kingshot-redeemer:latest
@@ -48,7 +47,6 @@ services:
     restart: unless-stopped
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - TIMEOUT_MS=${TIMEOUT_MS}
     volumes:
       - kingshot-data:/data
 
@@ -60,7 +58,6 @@ volumes:
 
 ```env
 DISCORD_TOKEN=your_discord_token_here
-TIMEOUT_MS=500
 ```
 
 3. Start the bot:
@@ -134,7 +131,6 @@ docker compose logs -f
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DISCORD_TOKEN` | ✅ Yes | - | Your Discord bot token from the Developer Portal |
-| `TIMEOUT_MS` | ❌ No | `500` | Browser automation timeout in milliseconds |
 | `GIFT_CODE_CHECK_INTERVAL_HOURS` | ❌ No | `1` | How often (in hours) to check for new gift codes. Minimum 1. Can also be changed at runtime with `/set-check-interval` without redeploying. |
 | `KINGSHOT_URL` | ❌ No | - | Base URL of the kingshot_web deployment, used by `/add` and `/refreshname` to look up kingdom `1259` player names. Same value/account as KSCompanion. Feature is silently disabled if unset. |
 | `KINGSHOT_USERNAME` | ❌ No | - | Login username for kingshot_web (same account as KSCompanion). |
@@ -291,7 +287,6 @@ docker run -d \
   --name sdw-redeemer-bot \
   --restart unless-stopped \
   -e DISCORD_TOKEN=your_discord_token_here \
-  -e TIMEOUT_MS=500 \
   -v kingshot-data:/app/data \
   brenak/kingshot-redeemer:latest
 ```

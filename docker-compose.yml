@@ -6,7 +6,6 @@ services:
     command: python -u main.py
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - TIMEOUT_MS=${TIMEOUT_MS}
       - KINGSHOT_URL=${KINGSHOT_URL}
       - KINGSHOT_USERNAME=${KINGSHOT_USERNAME}
       - KINGSHOT_PASSWORD=${KINGSHOT_PASSWORD}

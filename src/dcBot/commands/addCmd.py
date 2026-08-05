@@ -6,7 +6,7 @@ import asyncio
 import random
 
 from dcBot.permissions import check_permissions
-from browser_automation.redeem import redeem_giftcode_for_all_players, DEFAULT_KINGDOM
+from giftcode_api.redeem import redeem_giftcode_for_all_players, DEFAULT_KINGDOM
 from services.kingshot_client import KingshotClient
 from services.kingshot_lookup import lookup_player_nick
 

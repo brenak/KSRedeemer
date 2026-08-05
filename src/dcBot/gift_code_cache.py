@@ -7,7 +7,7 @@ from discord.ext import tasks
 from datetime import datetime
 from typing import Dict, Any, Callable, List, Optional
 
-from browser_automation.redeem import redeem_giftcode_for_all_players
+from giftcode_api.redeem import redeem_giftcode_for_all_players
 from config.config import GIFT_CODE_CHECK_INTERVAL_HOURS
 from services.kingshot_client import KingshotClient
 from services.kingshot_lookup import refresh_player_nicks

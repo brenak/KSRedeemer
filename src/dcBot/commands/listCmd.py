@@ -3,7 +3,7 @@ from discord import app_commands
 from typing import List, Dict, Any
 
 from dcBot.permissions import check_channel_only
-from browser_automation.redeem import DEFAULT_KINGDOM
+from giftcode_api.redeem import DEFAULT_KINGDOM
 
 
 class PlayerListView(discord.ui.View):
