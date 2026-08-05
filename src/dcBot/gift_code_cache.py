@@ -9,15 +9,24 @@ from typing import Dict, Any, Callable, List, Optional
 
 from browser_automation.redeem import redeem_giftcode_for_all_players
 from config.config import GIFT_CODE_CHECK_INTERVAL_HOURS
+from services.kingshot_client import KingshotClient
+from services.kingshot_lookup import refresh_player_nicks
 
 WIKI_URL = "https://kingshotwiki.com/giftcodes/"
 
 
 class GiftCodeCacheManager:
-    def __init__(self, bot: discord.Client, bot_data: Dict[str, Any], save_data_func: Callable[[Dict[str, Any]], None]):
+    def __init__(
+        self,
+        bot: discord.Client,
+        bot_data: Dict[str, Any],
+        save_data_func: Callable[[Dict[str, Any]], None],
+        kingshot_client: KingshotClient,
+    ):
         self.bot = bot
         self.bot_data = bot_data
         self.save_data = save_data_func
+        self.kingshot_client = kingshot_client
         self.api_url = "https://kingshot.net/api/gift-codes"
 
         self.check_codes.change_interval(hours=self._get_stored_interval())
@@ -217,6 +226,11 @@ class GiftCodeCacheManager:
 
                             # Save after each code so a crash mid-loop doesn't lose progress
                             self.save_data(self.bot_data)
+
+                        renamed = await refresh_player_nicks(players, self.kingshot_client)
+                        if renamed:
+                            self.save_data(self.bot_data)
+                            print(f"💾 Refreshed {len(renamed)} player name(s) from kingshot_web")
 
                         # Send Discord notification
                         try:

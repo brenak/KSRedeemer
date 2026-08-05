@@ -7,6 +7,8 @@ import random
 
 from dcBot.permissions import check_permissions
 from browser_automation.redeem import redeem_giftcode_for_all_players
+from services.kingshot_client import KingshotClient
+from services.kingshot_lookup import refresh_player_nicks
 
 
 def register_catchup_command(
@@ -14,6 +16,7 @@ def register_catchup_command(
     bot_data: Dict[str, Any],
     save_bot_data: Callable[[Dict[str, Any]], None],
     add_queue,
+    kingshot_client: KingshotClient,
 ):
     @tree.command(
         name="catchup",
@@ -127,6 +130,8 @@ def register_catchup_command(
                     if code not in expired_codes:
                         code_results.append((code, succeeded, failed_msgs))
 
+                renamed = await refresh_player_nicks(players_to_check, kingshot_client)
+
                 save_bot_data(bot_data)
 
                 # --- Build response ---
@@ -147,6 +152,9 @@ def register_catchup_command(
 
                 for code in expired_codes:
                     lines.append(f"⏰ `{code}` — expired, removed from active list")
+
+                if renamed:
+                    lines.append(f"\n💾 Refreshed {len(renamed)} name(s) from kingshot_web")
 
                 response = "\n".join(lines)
                 if len(response) > 1900:

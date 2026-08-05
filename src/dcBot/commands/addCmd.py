@@ -7,6 +7,8 @@ import random
 
 from dcBot.permissions import check_permissions
 from browser_automation.redeem import redeem_giftcode_for_all_players, DEFAULT_KINGDOM
+from services.kingshot_client import KingshotClient
+from services.kingshot_lookup import lookup_player_nick
 
 
 def register_add_command(
@@ -14,13 +16,20 @@ def register_add_command(
     bot_data: Dict[str, Any],
     save_bot_data: Callable[[Dict[str, Any]], None],
     add_queue,
+    kingshot_client: KingshotClient,
 ):
     @tree.command(name="add", description="Add a new player by ID")
     @app_commands.describe(
         player_id="The player ID to add",
         kingdom=f"The player's kingdom number (defaults to {DEFAULT_KINGDOM})",
+        name="Optional name/tag for this player (skips the kingdom-1259 name lookup)",
     )
-    async def add_player(interaction: discord.Interaction, player_id: str, kingdom: Optional[str] = None):
+    async def add_player(
+        interaction: discord.Interaction,
+        player_id: str,
+        kingdom: Optional[str] = None,
+        name: Optional[str] = None,
+    ):
 
         permission_error = check_permissions(interaction, bot_data)
         if permission_error:
@@ -56,10 +65,17 @@ def register_add_command(
                     )
                     return
 
+                player_kingdom = kingdom or DEFAULT_KINGDOM
+                resolved_nick = name
+                if not resolved_nick:
+                    resolved_nick = await lookup_player_nick(player_id, player_kingdom, kingshot_client)
+                if not resolved_nick:
+                    resolved_nick = f"Player {player_id}"
+
                 new_player = {
                     "player_id": player_id,
-                    "player_nick": f"Player {player_id}",
-                    "kingdom": kingdom or DEFAULT_KINGDOM,
+                    "player_nick": resolved_nick,
+                    "kingdom": player_kingdom,
                 }
                 current_players.append(new_player)
                 bot_data["players"] = current_players

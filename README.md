@@ -7,7 +7,7 @@ A Discord bot that automates gift code redemption for Kingshot players using bro
 
 - 🎁 **Bulk Redemption** - Redeem gift codes for all registered players at once
 - 🤖 **Browser Automation** - Uses Playwright for reliable web interaction
-- 💾 **Auto-Sync Player Names** - Player nicknames automatically update from the offician redeeming site
+- 💾 **Auto-Sync Player Names** - Kingdom 1259 player nicknames are looked up from kingshot_web on add and refreshed on every `/redeem`/`/catchup`/auto-redeem; other kingdoms can be manually tagged with `/setname`
 - 📋 **Player Management** - Add, remove, search, and list players
 - 🔄 **Auto-Update Check** - Automatically checks for new Docker image versions every 24h
 - 🐳 **Docker Ready** - Easy deployment with Docker/Docker Compose
@@ -116,14 +116,16 @@ docker compose logs -f
 | Command | Description | Example |
 |---------|-------------|----------|
 | `/setup <channel> <role>` | Configure update notifications channel and admin role | `/setup #my-channel @KingshotAdmin` |
-| `/redeem <gift_code>` | Redeem a gift code for all registered players | `/redeem KSFB15K` |
-| `/add <player_id> [kingdom]` | Add a new player and auto-redeem all active codes for them. Kingdom defaults to `1259` if omitted | `/add 123456789 1259` |
+| `/redeem <gift_code>` | Redeem a gift code for all registered players. Also refreshes kingdom `1259` names from kingshot_web | `/redeem KSFB15K` |
+| `/add <player_id> [kingdom] [name]` | Add a new player and auto-redeem all active codes for them. Kingdom defaults to `1259`; kingdom `1259` players auto-look up their name from kingshot_web unless `name` is given | `/add 123456789 1300 Syde` |
 | `/setkingdom <player_id> <kingdom>` | Update a player's kingdom number (e.g. after they migrate) | `/setkingdom 123456789 1300` |
+| `/setname <player_id> <name>` | Manually set/tag a player's name (any kingdom) | `/setname 123456789 Syde` |
+| `/refreshname <player_id>` | Re-look up a kingdom `1259` player's name from kingshot_web | `/refreshname 123456789` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
 | `/find <query>` | Search for a player by ID or nickname | `/find 123456789` |
 | `/codes` | List all currently active gift codes and their source (API/Wiki) | `/codes` |
-| `/catchup [player_id]` | Redeem any active codes a player (or all players) haven't received yet | `/catchup` |
+| `/catchup [player_id]` | Redeem any active codes a player (or all players) haven't received yet. Also refreshes kingdom `1259` names from kingshot_web | `/catchup` |
 | `/set-check-interval <hours>` | Set how often the bot checks for new gift codes (min 1 hour) | `/set-check-interval 2` |
 | `/help` | Display all available commands and usage | `/help` |
 
@@ -134,6 +136,9 @@ docker compose logs -f
 | `DISCORD_TOKEN` | ✅ Yes | - | Your Discord bot token from the Developer Portal |
 | `TIMEOUT_MS` | ❌ No | `500` | Browser automation timeout in milliseconds |
 | `GIFT_CODE_CHECK_INTERVAL_HOURS` | ❌ No | `1` | How often (in hours) to check for new gift codes. Minimum 1. Can also be changed at runtime with `/set-check-interval` without redeploying. |
+| `KINGSHOT_URL` | ❌ No | - | Base URL of the kingshot_web deployment, used by `/add` and `/refreshname` to look up kingdom `1259` player names. Same value/account as KSCompanion. Feature is silently disabled if unset. |
+| `KINGSHOT_USERNAME` | ❌ No | - | Login username for kingshot_web (same account as KSCompanion). |
+| `KINGSHOT_PASSWORD` | ❌ No | - | Login password for kingshot_web (same account as KSCompanion). |
 
 ## Data Persistence & Backup
 

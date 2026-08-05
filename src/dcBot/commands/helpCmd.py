@@ -37,19 +37,23 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "Redeem a Kingshot gift code for all players or a single player ID.\n"
                     "**Examples:** `/redeem KSFB15K` or `/redeem KSFB15K 48666532`\n"
                     "• Shows success/failure for each player\n"
+                    "• Refreshes kingdom `1259` player names from kingshot_web along the way\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
             )
 
             embed.add_field(
-                name="➕ /add <player_id> [kingdom]",
+                name="➕ /add <player_id> [kingdom] [name]",
                 value=(
                     "Add a new player to the redemption list.\n"
-                    "**Examples:** `/add 48666532` or `/add 48666532 1259`\n"
+                    "**Examples:** `/add 48666532` or `/add 48666532 1300 Syde`\n"
                     "• Checks if player already exists\n"
                     "• Kingdom defaults to `1259` if omitted\n"
-                    "• Creates placeholder nickname\n"
+                    "• Kingdom `1259` players auto-look up their real name from kingshot_web "
+                    "unless `name` is given\n"
+                    "• Non-1259 players fall back to a placeholder nickname unless `name` is given "
+                    "— use `name` to tag/label them\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -60,6 +64,28 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                 value=(
                     "Update a player's kingdom number (e.g. after they migrate).\n"
                     "**Example:** `/setkingdom 48666532 1300`\n"
+                    "• Requires bot admin permissions"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="🏷️ /setname <player_id> <name>",
+                value=(
+                    "Manually set/tag a player's name (any kingdom).\n"
+                    "**Example:** `/setname 48666532 Syde`\n"
+                    "• Requires bot admin permissions"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="🔃 /refreshname <player_id>",
+                value=(
+                    "Re-look up a kingdom `1259` player's real name from kingshot_web.\n"
+                    "**Example:** `/refreshname 48666532`\n"
+                    "• Only works for kingdom `1259` players — others should use `/setname`\n"
+                    "• No-op if the player isn't Intel-confirmed in kingshot_web yet\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -118,6 +144,7 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "• Omit `player_id` to catch up all players\n"
                     "• Queued behind any in-progress `/add` requests\n"
                     "• Reports per-code results and marks expired codes\n"
+                    "• Refreshes kingdom `1259` player names from kingshot_web along the way\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
