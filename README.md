@@ -66,13 +66,13 @@ TIMEOUT_MS=500
 3. Start the bot:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 4. View logs:
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ## Discord Bot Setup
@@ -208,7 +208,7 @@ docker restart sdw-redeemer-bot
 
 ### Bot not responding
 
-1. Check logs: `docker-compose logs -f`
+1. Check logs: `docker compose logs -f`
 2. Verify `DISCORD_TOKEN` is correct
 3. Ensure bot has proper permissions in Discord
 4. Check that Message Content Intent is enabled
@@ -274,8 +274,8 @@ docker pull brenak/kingshot-redeemer:latest
 Copy your `docker-compose.yml` and `.env` file to the server, then:
 
 ```bash
-docker-compose up -d
-docker-compose logs -f   # verify it started cleanly
+docker compose up -d
+docker compose logs -f   # verify it started cleanly
 ```
 
 **Option B — Docker Run:**
@@ -295,8 +295,8 @@ docker run -d \
 On the remote server, pull the latest image and recreate the container (your volume data is preserved):
 
 ```bash
-docker-compose pull
-docker-compose up -d --force-recreate
+docker compose pull
+docker compose up -d --force-recreate
 ```
 
 Or with plain Docker:
