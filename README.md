@@ -117,7 +117,8 @@ docker compose logs -f
 |---------|-------------|----------|
 | `/setup <channel> <role>` | Configure update notifications channel and admin role | `/setup #my-channel @KingshotAdmin` |
 | `/redeem <gift_code>` | Redeem a gift code for all registered players | `/redeem KSFB15K` |
-| `/add <player_id>` | Add a new player and auto-redeem all active codes for them | `/add 123456789` |
+| `/add <player_id> [kingdom]` | Add a new player and auto-redeem all active codes for them. Kingdom defaults to `1259` if omitted | `/add 123456789 1259` |
+| `/setkingdom <player_id> <kingdom>` | Update a player's kingdom number (e.g. after they migrate) | `/setkingdom 123456789 1300` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
 | `/find <query>` | Search for a player by ID or nickname | `/find 123456789` |
