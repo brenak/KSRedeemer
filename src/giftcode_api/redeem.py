@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import random
 import time
 from typing import Any, Dict, List
@@ -81,9 +82,21 @@ async def perform_giftcode_redeem(
             data=body,
             timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS),
         ) as resp:
-            payload = await resp.json(content_type=None)
+            status = resp.status
+            text = await resp.text()
     except (aiohttp.ClientError, TimeoutError) as e:
         return {"success": False, "message": f"Request failed: {e}", "err_code": None}
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        preview = text[:200] if text else "<empty body>"
+        print(f"Non-JSON response (HTTP {status}) for [{gift_code}] {player_id}: {preview!r}")
+        return {
+            "success": False,
+            "message": f"Unexpected response from server (HTTP {status}). Try again shortly.",
+            "err_code": None,
+        }
 
     err_code = payload.get("err_code")
     message = ERROR_MESSAGES.get(err_code) or payload.get("msg") or "Unknown response."
