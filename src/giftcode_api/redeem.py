@@ -20,6 +20,15 @@ SIGN_SECRET = "mN4!pQs6JrYwV9"
 
 HTTP_TIMEOUT_SECONDS = 15
 
+# 429 retry/backoff. Observed in production: once the API starts returning
+# 429, every immediately-following request also gets 429'd -- retrying the
+# same player a few times with real waiting room (honoring Retry-After when
+# the server sends one) recovers from a short-lived burst; RATE_LIMITED
+# (below) is the signal used to stop the whole batch if it's still 429ing
+# after retries, rather than blasting the rest of the roster into more 429s.
+MAX_429_RETRIES = 3
+DEFAULT_429_BACKOFF_SECONDS = 20
+
 SUCCESS_ERR_CODE = 20000
 
 # err_code -> English message, reverse-engineered from the same bundle's
@@ -76,16 +85,37 @@ async def perform_giftcode_redeem(
     }
     body = {"sign": _sign(params), **params}
 
-    try:
-        async with session.post(
-            f"{API_BASE}/gift_code",
-            data=body,
-            timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS),
-        ) as resp:
-            status = resp.status
-            text = await resp.text()
-    except (aiohttp.ClientError, TimeoutError) as e:
-        return {"success": False, "message": f"Request failed: {e}", "err_code": None}
+    for attempt in range(MAX_429_RETRIES + 1):
+        try:
+            async with session.post(
+                f"{API_BASE}/gift_code",
+                data=body,
+                timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS),
+            ) as resp:
+                status = resp.status
+                retry_after = resp.headers.get("Retry-After")
+                text = await resp.text()
+        except (aiohttp.ClientError, TimeoutError) as e:
+            return {"success": False, "message": f"Request failed: {e}", "err_code": None}
+
+        if status != 429:
+            break
+
+        if attempt >= MAX_429_RETRIES:
+            print(f"Still rate limited (HTTP 429) after {MAX_429_RETRIES} retries for {player_id} -- giving up on this batch.")
+            return {
+                "success": False,
+                "message": "Rate limited by the gift-code server. Try again later.",
+                "err_code": None,
+                "rate_limited": True,
+            }
+
+        try:
+            wait = float(retry_after) if retry_after else DEFAULT_429_BACKOFF_SECONDS * (attempt + 1)
+        except ValueError:
+            wait = DEFAULT_429_BACKOFF_SECONDS * (attempt + 1)
+        print(f"Rate limited (HTTP 429) for {player_id}, waiting {wait:.0f}s before retry {attempt + 1}/{MAX_429_RETRIES}...")
+        await asyncio.sleep(wait)
 
     try:
         payload = json.loads(text)
@@ -115,13 +145,26 @@ async def redeem_giftcode_for_all_players(players: List[Dict[str, str]], gift_co
     async with aiohttp.ClientSession() as session:
         for i, player in enumerate(players):
             if i > 0:
-                await asyncio.sleep(random.uniform(1, 2))  # polite pacing between requests
+                await asyncio.sleep(random.uniform(2, 4))  # polite pacing between requests
 
             player_id = player.get("player_id", "")
             kingdom = player.get("kingdom") or DEFAULT_KINGDOM
             stored_nick = player.get("player_nick")
 
             result = await perform_giftcode_redeem(player_id, kingdom, gift_code, session)
+
+            if result.get("rate_limited"):
+                # Every request right after a 429 has been observed to also
+                # 429 -- stop here rather than burning through the rest of
+                # the roster into more rate limiting. Players not yet
+                # reached just get picked up on the next catchup/redeem.
+                results.append({
+                    "success": False,
+                    "errorCode": "RATE_LIMITED",
+                    "message": "Rate limited by the gift-code server. Remaining players skipped this run.",
+                })
+                return results
+
             err_code = result.get("err_code")
 
             if err_code == INVALID_CODE_ERR_CODE:

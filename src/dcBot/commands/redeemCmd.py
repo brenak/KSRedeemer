@@ -100,6 +100,11 @@ def register_redeem_command(
                     failed_players.append(f"⏰ Gift code `{gift_code}` has expired and has been removed from the active list.")
                     break
 
+                if error_code == "RATE_LIMITED":
+                    failed += 1
+                    failed_players.append(f"🚦 {item.get('message', 'Rate limited by the gift-code server.')}")
+                    break
+
                 redeemed_player_id = item.get("player_id")
 
                 success = item.get("success")

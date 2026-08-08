@@ -219,6 +219,10 @@ class GiftCodeCacheManager:
                                 if error_code == "INVALID_CODE":
                                     break
 
+                                if error_code == "RATE_LIMITED":
+                                    print(f"🚦 Gift code [{code}] auto-redeem rate limited — remaining players will be picked up on the next check/catchup.")
+                                    break
+
                                 if item.get("success"):
                                     player_id = item.get("player_id")
                                     if player_id and player_id not in code_list:

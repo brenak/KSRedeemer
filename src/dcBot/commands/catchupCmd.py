@@ -117,6 +117,10 @@ def register_catchup_command(
                             failed_msgs.append("Invalid code")
                             break
 
+                        if error_code == "RATE_LIMITED":
+                            failed_msgs.append(item.get("message", "Rate limited by the gift-code server."))
+                            break
+
                         pid = item.get("player_id")
                         if item.get("success"):
                             succeeded += 1
