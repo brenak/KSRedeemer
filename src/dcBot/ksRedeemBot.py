@@ -16,11 +16,14 @@ from dcBot.commands.catchupCmd import register_catchup_command
 from dcBot.commands.setKingdomCmd import register_set_kingdom_command
 from dcBot.commands.setNameCmd import register_set_name_command
 from dcBot.commands.refreshNameCmd import register_refresh_name_command
+from dcBot.commands.allianceCmd import register_alliance_commands
 from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
 from dcBot.gift_code_cache import GiftCodeCacheManager
+from dcBot.alliance_sync import AllianceSyncManager
 from dcBot.add_queue import AddQueue
-from services.kingshot_client import KingshotClient
+from services.mightpulse_client import MightPulseClient
+from config.config import DISCORD_GUILD_ID
 
 
 def load_bot_data_with_players():
@@ -34,7 +37,7 @@ def save_bot_data_with_players(data):
     save_bot_data(data)
 
 
-def init_bot(token: str) -> tuple[discord.Client, KingshotClient]:
+def init_bot(token: str) -> tuple[discord.Client, MightPulseClient]:
     if not token:
         raise ValueError("Discord token cannot be empty")
 
@@ -44,16 +47,17 @@ def init_bot(token: str) -> tuple[discord.Client, KingshotClient]:
 
     bot_data = load_bot_data_with_players()
     add_queue = AddQueue()
-    kingshot_client = KingshotClient()
+    mightpulse_client = MightPulseClient()
 
     # Register commands
-    register_redeem_command(tree, bot_data, save_bot_data_with_players, kingshot_client)
+    register_redeem_command(tree, bot_data, save_bot_data_with_players)
     register_list_command(tree, bot_data)
-    register_add_command(tree, bot_data, save_bot_data_with_players, add_queue, kingshot_client)
+    register_add_command(tree, bot_data, save_bot_data_with_players, add_queue, mightpulse_client)
     register_remove_command(tree, bot_data, save_bot_data_with_players)
     register_set_kingdom_command(tree, bot_data, save_bot_data_with_players)
     register_set_name_command(tree, bot_data, save_bot_data_with_players)
-    register_refresh_name_command(tree, bot_data, save_bot_data_with_players, kingshot_client)
+    register_refresh_name_command(tree, bot_data, save_bot_data_with_players, add_queue, mightpulse_client)
+    register_alliance_commands(tree, bot_data, save_bot_data_with_players, add_queue, mightpulse_client)
     register_find_command(tree, bot_data)
     register_help_command(tree, bot_data)
     register_codes_command(tree, bot_data)
@@ -63,29 +67,32 @@ def init_bot(token: str) -> tuple[discord.Client, KingshotClient]:
     client.update_checker = UpdateChecker(client, bot_data, save_bot_data_with_players)
 
     # Initialize GiftCodeCacheManager
-    cache_manager = GiftCodeCacheManager(client, bot_data, save_bot_data_with_players, kingshot_client)
+    cache_manager = GiftCodeCacheManager(client, bot_data, save_bot_data_with_players, mightpulse_client)
     client.gift_code_cache = cache_manager
+    client.alliance_sync = AllianceSyncManager(
+        client, bot_data, save_bot_data_with_players, mightpulse_client, add_queue
+    )
     register_set_check_interval_command(tree, bot_data, cache_manager)
-    register_catchup_command(tree, bot_data, save_bot_data_with_players, add_queue, kingshot_client)
+    register_catchup_command(tree, bot_data, save_bot_data_with_players, add_queue)
 
     @client.event
     async def on_ready():
         add_queue.start()
-        guild = discord.Object(id=1482088126640947483)
+        guild = discord.Object(id=DISCORD_GUILD_ID)
         tree.copy_global_to(guild=guild)
         await tree.sync(guild=guild)
         print(f"✅ Logged in as {client.user} · commands synced")
 
     @client.event
     async def on_disconnect():
-        await kingshot_client.close()
+        await mightpulse_client.close()
 
-    return client, kingshot_client
+    return client, mightpulse_client
 
 
 async def start_bot(token: str):
-    client, kingshot_client = init_bot(token)
+    client, mightpulse_client = init_bot(token)
     try:
         await client.start(token)
     finally:
-        await kingshot_client.close()
+        await mightpulse_client.close()

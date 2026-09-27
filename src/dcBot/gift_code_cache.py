@@ -9,8 +9,9 @@ from typing import Dict, Any, Callable, List, Optional
 
 from giftcode_api.redeem import redeem_giftcode_for_all_players
 from config.config import GIFT_CODE_CHECK_INTERVAL_HOURS
-from services.kingshot_client import KingshotClient
-from services.kingshot_lookup import refresh_player_nicks
+from dcBot.alliance_sync import onboard_new_members
+from services.mightpulse_client import MightPulseClient
+from services.player_sync import refresh_all_players
 
 WIKI_URL = "https://kingshotwiki.com/giftcodes/"
 
@@ -21,12 +22,12 @@ class GiftCodeCacheManager:
         bot: discord.Client,
         bot_data: Dict[str, Any],
         save_data_func: Callable[[Dict[str, Any]], None],
-        kingshot_client: KingshotClient,
+        mightpulse_client: MightPulseClient,
     ):
         self.bot = bot
         self.bot_data = bot_data
         self.save_data = save_data_func
-        self.kingshot_client = kingshot_client
+        self.mightpulse_client = mightpulse_client
         self.api_url = "https://kingshot.net/api/gift-codes"
 
         self.check_codes.change_interval(hours=self._get_stored_interval())
@@ -197,6 +198,18 @@ class GiftCodeCacheManager:
 
                 # --- Auto-redeem new codes ---
                 if new_codes:
+                    # Only spend MightPulse quota when a code actually drops:
+                    # sync tracked alliances (registers new members) and
+                    # refresh everyone's name/kingdom/alliance *before*
+                    # redeeming, so a player who transferred is redeemed
+                    # against their new kingdom.
+                    sync_report = await refresh_all_players(
+                        self.bot_data, self.mightpulse_client, add_new_members=True
+                    )
+                    self.save_data(self.bot_data)
+                    if sync_report.changed():
+                        print("💾 MightPulse refresh: " + " | ".join(sync_report.summary_lines()))
+
                     players = self.bot_data.get("players", [])
                     if players:
                         print(f"🎁 Found {len(new_codes)} new code(s). Auto-redeeming for {len(players)} player(s)...")
@@ -231,10 +244,11 @@ class GiftCodeCacheManager:
                             # Save after each code so a crash mid-loop doesn't lose progress
                             self.save_data(self.bot_data)
 
-                        renamed = await refresh_player_nicks(players, self.kingshot_client)
-                        if renamed:
-                            self.save_data(self.bot_data)
-                            print(f"💾 Refreshed {len(renamed)} player name(s) from kingshot_web")
+                        # New alliance members just got the new code(s) above;
+                        # give them every other active code too.
+                        onboard_lines = await onboard_new_members(
+                            self.bot_data, sync_report.added, self.save_data
+                        )
 
                         # Send Discord notification
                         try:
@@ -244,11 +258,17 @@ class GiftCodeCacheManager:
                                 channel = self.bot.get_channel(channel_id)
                                 if channel:
                                     codes_str = ", ".join([f"`{c}`" for c in new_codes])
-                                    await channel.send(
+                                    message = (
                                         f"🎁 **New Gift Code{'s' if len(new_codes) > 1 else ''}!**\n"
                                         f"{codes_str}\n"
                                         f"Auto-redeemed for {len(players)} player{'s' if len(players) > 1 else ''}."
                                     )
+                                    extra = sync_report.summary_lines() + onboard_lines
+                                    if extra:
+                                        message += "\n\n" + "\n".join(extra)
+                                    if len(message) > 1900:
+                                        message = message[:1900] + "\n…(truncated)"
+                                    await channel.send(message)
                         except Exception as e:
                             print(f"⚠️ Could not send gift code notification: {e}")
 

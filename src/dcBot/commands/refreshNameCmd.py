@@ -3,21 +3,22 @@ from discord import app_commands
 from typing import Callable, Dict, Any
 
 from dcBot.permissions import check_permissions
-from services.kingshot_client import KingshotClient
-from services.kingshot_lookup import lookup_player_nick, LOOKUP_KINGDOM
+from services.mightpulse_client import MightPulseClient, MightPulseError
+from services.player_sync import apply_player_info, lookup_player, refresh_all_players
 
 
 def register_refresh_name_command(
     tree: app_commands.CommandTree,
     bot_data: Dict[str, Any],
     save_bot_data: Callable[[Dict[str, Any]], None],
-    kingshot_client: KingshotClient,
+    add_queue,
+    mightpulse_client: MightPulseClient,
 ):
     @tree.command(
         name="refreshname",
-        description=f"Re-look up a kingdom {LOOKUP_KINGDOM} player's name from kingshot_web",
+        description="Re-look up a player's name, kingdom and alliance from MightPulse (or 'all')",
     )
-    @app_commands.describe(player_id="The player ID to refresh")
+    @app_commands.describe(player_id="The player ID to refresh, or 'all' for every registered player")
     async def refresh_name(interaction: discord.Interaction, player_id: str):
 
         permission_error = check_permissions(interaction, bot_data)
@@ -26,6 +27,14 @@ def register_refresh_name_command(
             return
 
         await interaction.response.defer(thinking=True)
+
+        if not mightpulse_client.configured():
+            await interaction.followup.send("❌ MightPulse lookup isn't configured on this bot (MIGHTPULSE_API_KEY).")
+            return
+
+        if player_id.strip().lower() == "all":
+            await _refresh_all(interaction)
+            return
 
         try:
             players = bot_data.get("players", [])
@@ -37,42 +46,60 @@ def register_refresh_name_command(
                 )
                 return
 
-            player_kingdom = player.get("kingdom", LOOKUP_KINGDOM)
-            if player_kingdom != LOOKUP_KINGDOM:
+            info = await lookup_player(player_id, mightpulse_client)
+            if not info:
                 await interaction.followup.send(
-                    f"❌ `/refreshname` only works for kingdom `{LOOKUP_KINGDOM}` players "
-                    f"— `{player_id}` is kingdom `{player_kingdom}`. Use `/setname` instead."
+                    f"⚠️ `{player_id}` wasn't found on MightPulse — unchanged (`{player.get('player_nick', 'N/A')}`)."
                 )
                 return
 
-            if not kingshot_client.configured():
-                await interaction.followup.send(
-                    "❌ kingshot_web lookup isn't configured on this bot "
-                    "(KINGSHOT_URL / KINGSHOT_USERNAME / KINGSHOT_PASSWORD)."
-                )
-                return
-
-            looked_up = await lookup_player_nick(player_id, player_kingdom, kingshot_client)
-            if not looked_up:
-                await interaction.followup.send(
-                    f"⚠️ `{player_id}` isn't in kingshot_web yet (not Intel-confirmed) "
-                    f"— name unchanged (`{player.get('player_nick', 'N/A')}`)."
-                )
-                return
-
-            old_nick = player.get("player_nick", "N/A")
-            if old_nick == looked_up:
-                await interaction.followup.send(f"✅ `{player_id}` name is already up to date: `{old_nick}`")
-                return
-
-            player["player_nick"] = looked_up
+            # An explicit single-player refresh means "use their in-game
+            # name", so it overrides a custom name from /setname or /add.
+            player.pop("nick_locked", None)
+            changes = apply_player_info(player, info)
             save_bot_data(bot_data)
 
+            if not changes:
+                await interaction.followup.send(
+                    f"✅ `{player_id}` is already up to date: `{player.get('player_nick', 'N/A')}`"
+                )
+                return
+
             await interaction.followup.send(
-                f"✅ Updated `{player_id}` name: `{old_nick}` → `{looked_up}`"
+                f"✅ Updated `{player_id}`:\n" + "\n".join(f"• {c}" for c in changes)
             )
 
+        except MightPulseError as e:
+            await interaction.followup.send(f"❌ MightPulse lookup failed: {e}")
         except Exception as e:
-            error_message = f"❌ Error refreshing name: {str(e)}"
-            await interaction.followup.send(error_message)
+            await interaction.followup.send(f"❌ Error refreshing name: {str(e)}")
             print(f"Error in refreshname command: {e}")
+
+    async def _refresh_all(interaction: discord.Interaction):
+        count = len(bot_data.get("players", []))
+        if not count:
+            await interaction.followup.send("❌ No players registered.")
+            return
+
+        position = add_queue.position()
+        if position > 0:
+            await interaction.followup.send(
+                f"⏳ Refresh of {count} player(s) queued — {position} request(s) ahead."
+            )
+
+        async def do_refresh():
+            try:
+                report = await refresh_all_players(bot_data, mightpulse_client, add_new_members=False)
+                save_bot_data(bot_data)
+
+                lines = [f"🔃 **Refreshed {count} player(s) from MightPulse**"]
+                lines.extend(report.summary_lines() or ["✅ Everything already up to date"])
+                response = "\n".join(lines)
+                if len(response) > 1900:
+                    response = response[:1900] + "\n…(truncated)"
+                await interaction.followup.send(response)
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error refreshing names: {str(e)}")
+                print(f"Error in refreshname all: {e}")
+
+        await add_queue.enqueue(do_refresh())

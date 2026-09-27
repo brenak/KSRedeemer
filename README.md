@@ -7,7 +7,8 @@ A Discord bot that automates gift code redemption for Kingshot players by callin
 
 - 🎁 **Bulk Redemption** - Redeem gift codes for all registered players at once
 - ⚡ **Direct API** - Calls Kingshot's gift-code API directly (no browser automation)
-- 💾 **Auto-Sync Player Names** - Kingdom 1259 player nicknames are looked up from kingshot_web on add and refreshed on every `/redeem`/`/catchup`/auto-redeem; other kingdoms can be manually tagged with `/setname`
+- 💾 **Auto-Sync Player Info** - Nicknames, kingdoms and alliances come from the [MightPulse API](https://api.mightpulse.com/): looked up on `/add`, and refreshed only when a new gift code appears (or via `/refreshname`) to stay within the API's rate limits. Kingdom transfers are picked up automatically, so redemption keeps working
+- 🏰 **Alliance Sync** - `/syncalliance <kingdom> <tag>` registers every alliance member; tracked alliances re-sync daily and whenever a new code appears, and new members get all active codes
 - 📋 **Player Management** - Add, remove, search, and list players
 - 🔄 **Auto-Update Check** - Automatically checks for new Docker image versions every 24h
 - 🐳 **Docker Ready** - Easy deployment with Docker/Docker Compose
@@ -113,16 +114,19 @@ docker compose logs -f
 | Command | Description | Example |
 |---------|-------------|----------|
 | `/setup <channel> <role>` | Configure update notifications channel and admin role | `/setup #my-channel @KingshotAdmin` |
-| `/redeem <gift_code>` | Redeem a gift code for all registered players. Also refreshes kingdom `1259` names from kingshot_web | `/redeem KSFB15K` |
-| `/add <player_id> [kingdom] [name]` | Add a new player and auto-redeem all active codes for them. Kingdom defaults to `1259`; kingdom `1259` players auto-look up their name from kingshot_web unless `name` is given | `/add 123456789 1300 Syde` |
-| `/setkingdom <player_id> <kingdom>` | Update a player's kingdom number (e.g. after they migrate) | `/setkingdom 123456789 1300` |
-| `/setname <player_id> <name>` | Manually set/tag a player's name (any kingdom) | `/setname 123456789 Syde` |
-| `/refreshname <player_id>` | Re-look up a kingdom `1259` player's name from kingshot_web | `/refreshname 123456789` |
+| `/redeem <gift_code>` | Redeem a gift code for all registered players | `/redeem KSFB15K` |
+| `/add <player_id> [kingdom] [name]` | Add a new player and auto-redeem all active codes for them. Name, kingdom and alliance are looked up from MightPulse; `kingdom` is only a fallback if the player isn't found. `name` sets a custom name that automatic refreshes keep | `/add 123456789 1300 Syde` |
+| `/setkingdom <player_id> <kingdom>` | Manually update a player's kingdom (normally updated automatically from MightPulse) | `/setkingdom 123456789 1300` |
+| `/setname <player_id> <name>` | Manually set/tag a player's name. Automatic refreshes keep it | `/setname 123456789 Syde` |
+| `/refreshname <player_id \| all>` | Re-look up name, kingdom and alliance from MightPulse for one player or everyone. A single-player refresh replaces a custom `/setname` name | `/refreshname all` |
+| `/syncalliance [kingdom] [tag]` | Register every member of an alliance (tag is case-sensitive) and track it. New members get all active codes. With no arguments, re-syncs all tracked alliances | `/syncalliance 1343 2mk` |
+| `/untrackalliance <kingdom> <tag>` | Stop syncing an alliance; its members stay registered | `/untrackalliance 1343 2mk` |
+| `/alliances` | List tracked alliances | `/alliances` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
 | `/find <query>` | Search for a player by ID or nickname | `/find 123456789` |
 | `/codes` | List all currently active gift codes and their source (API/Wiki) | `/codes` |
-| `/catchup [player_id]` | Redeem any active codes a player (or all players) haven't received yet. Also refreshes kingdom `1259` names from kingshot_web | `/catchup` |
+| `/catchup [player_id]` | Redeem any active codes a player (or all players) haven't received yet | `/catchup` |
 | `/set-check-interval <hours>` | Set how often the bot checks for new gift codes (min 1 hour) | `/set-check-interval 2` |
 | `/help` | Display all available commands and usage | `/help` |
 
@@ -132,9 +136,18 @@ docker compose logs -f
 |----------|----------|---------|-------------|
 | `DISCORD_TOKEN` | ✅ Yes | - | Your Discord bot token from the Developer Portal |
 | `GIFT_CODE_CHECK_INTERVAL_HOURS` | ❌ No | `1` | How often (in hours) to check for new gift codes. Minimum 1. Can also be changed at runtime with `/set-check-interval` without redeploying. |
-| `KINGSHOT_URL` | ❌ No | - | Base URL of the kingshot_web deployment, used by `/add` and `/refreshname` to look up kingdom `1259` player names. Same value/account as KSCompanion. Feature is silently disabled if unset. |
-| `KINGSHOT_USERNAME` | ❌ No | - | Login username for kingshot_web (same account as KSCompanion). |
-| `KINGSHOT_PASSWORD` | ❌ No | - | Login password for kingshot_web (same account as KSCompanion). |
+| `DISCORD_GUILD_ID` | ❌ No | `1530565101453840434` | Server (guild) ID slash commands are synced to on startup — guild sync makes commands appear almost instantly. One deployment serves one server. |
+| `CONTAINER_NAME` / `DATA_VOLUME` | ❌ No | `sdw-redeemer-bot` / `kingshot-data` | docker-compose only. Set both to something unique when running a second copy of the bot on the same host, so it gets its own container and its own player data. |
+| `MIGHTPULSE_API_KEY` | ❌ No | - | [MightPulse](https://api.mightpulse.com/) API key (get one via Discord login on their site). Powers player name/kingdom/alliance lookups and alliance sync. Silently disabled if unset. |
+
+### MightPulse rate limits
+
+The API key allows 60 requests/minute and 5,000/day, so the bot is deliberately frugal:
+
+- The routine gift-code check makes **no** MightPulse calls; `/redeem` and `/catchup` don't either.
+- When a new code appears, tracked alliance rosters are pulled first (one request per alliance covers every member), then only players outside those rosters are looked up individually. This happens before redeeming, so kingdom transfers are applied first.
+- The daily alliance sync costs one request per tracked alliance.
+- All requests share a throttle (~1 per 1.1s). A 429 is retried once; if it persists, the batch stops and the rest catch up next time.
 
 ## Data Persistence & Backup
 

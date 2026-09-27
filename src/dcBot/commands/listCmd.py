@@ -6,6 +6,19 @@ from dcBot.permissions import check_channel_only
 from giftcode_api.redeem import DEFAULT_KINGDOM
 
 
+def format_player_details(player: Dict[str, Any]) -> str:
+    """ID · Kingdom · Alliance line shared by /list and /find."""
+    details = f"ID: `{player.get('player_id', 'Unknown')}` · Kingdom: `{player.get('kingdom', DEFAULT_KINGDOM)}`"
+    if "alliance_tag" in player:
+        tag = player.get("alliance_tag")
+        if tag:
+            name = player.get("alliance_name")
+            details += f" · Alliance: `[{tag}]`" + (f" {name}" if name else "")
+        else:
+            details += " · Alliance: none"
+    return details
+
+
 class PlayerListView(discord.ui.View):
     def __init__(self, players: List[Dict[str, Any]], page: int = 0):
         super().__init__(timeout=180)
@@ -31,12 +44,9 @@ class PlayerListView(discord.ui.View):
         )
 
         for player in page_players:
-            player_id = player.get("player_id", "Unknown")
-            player_nick = player.get("player_nick", "N/A")
-            kingdom = player.get("kingdom", DEFAULT_KINGDOM)
             embed.add_field(
-                name=f"{player_nick}",
-                value=f"ID: `{player_id}` · Kingdom: `{kingdom}`",
+                name=f"{player.get('player_nick', 'N/A')}",
+                value=format_player_details(player),
                 inline=False,
             )
 

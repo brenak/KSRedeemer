@@ -7,8 +7,8 @@ import random
 
 from dcBot.permissions import check_permissions
 from giftcode_api.redeem import redeem_giftcode_for_all_players, DEFAULT_KINGDOM
-from services.kingshot_client import KingshotClient
-from services.kingshot_lookup import lookup_player_nick
+from services.mightpulse_client import MightPulseClient, MightPulseError
+from services.player_sync import apply_player_info, lookup_player
 
 
 def register_add_command(
@@ -16,13 +16,13 @@ def register_add_command(
     bot_data: Dict[str, Any],
     save_bot_data: Callable[[Dict[str, Any]], None],
     add_queue,
-    kingshot_client: KingshotClient,
+    mightpulse_client: MightPulseClient,
 ):
     @tree.command(name="add", description="Add a new player by ID")
     @app_commands.describe(
         player_id="The player ID to add",
-        kingdom=f"The player's kingdom number (defaults to {DEFAULT_KINGDOM})",
-        name="Optional name/tag for this player (skips the kingdom-1259 name lookup)",
+        kingdom=f"Only used if MightPulse can't find the player (defaults to {DEFAULT_KINGDOM})",
+        name="Optional custom name/tag -- kept instead of the in-game name on refreshes",
     )
     async def add_player(
         interaction: discord.Interaction,
@@ -65,18 +65,39 @@ def register_add_command(
                     )
                     return
 
-                player_kingdom = kingdom or DEFAULT_KINGDOM
-                resolved_nick = name
-                if not resolved_nick:
-                    resolved_nick = await lookup_player_nick(player_id, player_kingdom, kingshot_client)
-                if not resolved_nick:
-                    resolved_nick = f"Player {player_id}"
+                # Best-effort: MightPulse gives the in-game name plus the
+                # player's *current* kingdom (which the redeem API needs),
+                # but /add must still work if it's down or unconfigured.
+                info = None
+                try:
+                    info = await lookup_player(player_id, mightpulse_client)
+                except MightPulseError as e:
+                    print(f"MightPulse lookup failed for {player_id}: {e}")
 
                 new_player = {
                     "player_id": player_id,
-                    "player_nick": resolved_nick,
-                    "kingdom": player_kingdom,
+                    "player_nick": name or f"Player {player_id}",
+                    "kingdom": kingdom or DEFAULT_KINGDOM,
                 }
+                if name:
+                    new_player["nick_locked"] = True
+                lookup_note = ""
+                if info:
+                    apply_player_info(new_player, info)
+                    if kingdom and new_player["kingdom"] != kingdom:
+                        lookup_note = (
+                            f"\nℹ️ MightPulse shows kingdom `{new_player['kingdom']}` "
+                            f"(not `{kingdom}`) — using that."
+                        )
+                elif mightpulse_client.configured():
+                    lookup_note = "\n⚠️ Player not found on MightPulse — name/alliance not looked up."
+                # An alliance sync may have registered them during the lookup
+                if any(p.get("player_id") == player_id for p in current_players):
+                    await interaction.followup.send(
+                        f"❌ Player `{player_id}` was already added (alliance sync)."
+                    )
+                    return
+
                 current_players.append(new_player)
                 bot_data["players"] = current_players
                 save_bot_data(bot_data)
@@ -144,6 +165,9 @@ def register_add_command(
                     f"✅ Added player `{player_id}` (Kingdom `{new_player['kingdom']}`) "
                     f"with nick `{new_player['player_nick']}`"
                 )
+                if new_player.get("alliance_tag"):
+                    final_response += f" · Alliance `[{new_player['alliance_tag']}]`"
+                final_response += lookup_note
                 if response_text:
                     final_response += f"\n\n{response_text}"
 

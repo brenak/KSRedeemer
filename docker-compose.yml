@@ -1,14 +1,13 @@
 services:
   kingshot-redeemer:
     image: brenak/kingshot-redeemer:latest
-    container_name: sdw-redeemer-bot
+    container_name: ${CONTAINER_NAME:-sdw-redeemer-bot}
     restart: unless-stopped
     command: python -u main.py
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - KINGSHOT_URL=${KINGSHOT_URL}
-      - KINGSHOT_USERNAME=${KINGSHOT_USERNAME}
-      - KINGSHOT_PASSWORD=${KINGSHOT_PASSWORD}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID:-1530565101453840434}
+      - MIGHTPULSE_API_KEY=${MIGHTPULSE_API_KEY}
     volumes:
       - kingshot-data:/app/data
     networks:
@@ -16,7 +15,7 @@ services:
 
 volumes:
   kingshot-data:
-    name: kingshot-data
+    name: ${DATA_VOLUME:-kingshot-data}
 
 networks:
   bot-network:

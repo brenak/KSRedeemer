@@ -37,7 +37,6 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "Redeem a Kingshot gift code for all players or a single player ID.\n"
                     "**Examples:** `/redeem KSFB15K` or `/redeem KSFB15K 48666532`\n"
                     "• Shows success/failure for each player\n"
-                    "• Refreshes kingdom `1259` player names from kingshot_web along the way\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -48,12 +47,10 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                 value=(
                     "Add a new player to the redemption list.\n"
                     "**Examples:** `/add 48666532` or `/add 48666532 1300 Syde`\n"
-                    "• Checks if player already exists\n"
-                    "• Kingdom defaults to `1259` if omitted\n"
-                    "• Kingdom `1259` players auto-look up their real name from kingshot_web "
-                    "unless `name` is given\n"
-                    "• Non-1259 players fall back to a placeholder nickname unless `name` is given "
-                    "— use `name` to tag/label them\n"
+                    "• Looks up the in-game name, kingdom and alliance from MightPulse\n"
+                    "• `kingdom` is only used if MightPulse can't find the player (defaults to `1259`)\n"
+                    "• `name` sets a custom name that automatic refreshes keep\n"
+                    "• Auto-redeems all active codes for the new player\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -62,8 +59,9 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
             embed.add_field(
                 name="🏰 /setkingdom <player_id> <kingdom>",
                 value=(
-                    "Update a player's kingdom number (e.g. after they migrate).\n"
+                    "Manually update a player's kingdom number.\n"
                     "**Example:** `/setkingdom 48666532 1300`\n"
+                    "• Usually not needed — kingdoms update from MightPulse automatically\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -72,20 +70,36 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
             embed.add_field(
                 name="🏷️ /setname <player_id> <name>",
                 value=(
-                    "Manually set/tag a player's name (any kingdom).\n"
+                    "Manually set/tag a player's name.\n"
                     "**Example:** `/setname 48666532 Syde`\n"
+                    "• Automatic refreshes keep this name (kingdom/alliance still update)\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
             )
 
             embed.add_field(
-                name="🔃 /refreshname <player_id>",
+                name="🔃 /refreshname <player_id | all>",
                 value=(
-                    "Re-look up a kingdom `1259` player's real name from kingshot_web.\n"
-                    "**Example:** `/refreshname 48666532`\n"
-                    "• Only works for kingdom `1259` players — others should use `/setname`\n"
-                    "• No-op if the player isn't Intel-confirmed in kingshot_web yet\n"
+                    "Re-look up name, kingdom and alliance from MightPulse.\n"
+                    "**Examples:** `/refreshname 48666532` or `/refreshname all`\n"
+                    "• A single-player refresh replaces a custom `/setname` name\n"
+                    "• `all` uses alliance rosters first to save API quota\n"
+                    "• Requires bot admin permissions"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="🏰 /syncalliance [kingdom] [tag]",
+                value=(
+                    "Add every member of an alliance and keep it tracked.\n"
+                    "**Examples:** `/syncalliance 1343 2mk` or `/syncalliance` (all tracked)\n"
+                    "• Tag is case-sensitive\n"
+                    "• New members get all active codes\n"
+                    "• Tracked alliances re-sync daily and whenever a new code appears\n"
+                    "• `/alliances` lists tracked alliances; `/untrackalliance <kingdom> <tag>` stops tracking "
+                    "(members stay registered)\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,
@@ -109,7 +123,7 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "View all registered players with pagination.\n"
                     "• Shows 10 players per page\n"
                     "• Navigate with ◀️ Previous / Next ▶️ buttons\n"
-                    "• Displays player nicknames, IDs, and kingdoms"
+                    "• Displays player nicknames, IDs, kingdoms and current alliances"
                 ),
                 inline=False,
             )
@@ -144,7 +158,6 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "• Omit `player_id` to catch up all players\n"
                     "• Queued behind any in-progress `/add` requests\n"
                     "• Reports per-code results and marks expired codes\n"
-                    "• Refreshes kingdom `1259` player names from kingshot_web along the way\n"
                     "• Requires bot admin permissions"
                 ),
                 inline=False,

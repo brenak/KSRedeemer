@@ -36,10 +36,14 @@ def register_set_name_command(
 
             old_nick = player.get("player_nick", "N/A")
             player["player_nick"] = name
+            # Automatic MightPulse refreshes keep this name (kingdom/alliance
+            # still update); /refreshname <player_id> goes back to the in-game name.
+            player["nick_locked"] = True
             save_bot_data(bot_data)
 
             await interaction.followup.send(
-                f"✅ Updated `{player_id}` name: `{old_nick}` → `{name}`"
+                f"✅ Updated `{player_id}` name: `{old_nick}` → `{name}`\n"
+                f"-# Kept on automatic refreshes — `/refreshname {player_id}` restores the in-game name."
             )
 
         except Exception as e:

@@ -5,15 +5,12 @@ from typing import Callable, Dict, Any, Optional
 
 from giftcode_api.redeem import redeem_giftcode_for_all_players
 from dcBot.permissions import check_permissions
-from services.kingshot_client import KingshotClient
-from services.kingshot_lookup import refresh_player_nicks
 
 
 def register_redeem_command(
     tree: app_commands.CommandTree,
     bot_data: Dict[str, Any],
     save_bot_data: Callable[[Dict[str, Any]], None],
-    kingshot_client: KingshotClient,
 ):
 
     @tree.command(
@@ -127,9 +124,7 @@ def register_redeem_command(
                     if pid not in code_list:
                         code_list.append(pid)
 
-            renamed = await refresh_player_nicks(players_to_redeem, kingshot_client)
-
-            if new_redemptions or renamed:
+            if new_redemptions:
                 bot_data["players"] = all_players
                 save_bot_data(bot_data)
 
@@ -142,13 +137,8 @@ def register_redeem_command(
             response_message += "\n\n"
             response_message += "\n".join(failed_players)
 
-            footer_parts = []
             if new_redemptions:
-                footer_parts.append(f"Recorded {len(new_redemptions)} new redemption(s)")
-            if renamed:
-                footer_parts.append(f"Refreshed {len(renamed)} name(s) from kingshot_web")
-            if footer_parts:
-                response_message += "\n\n💾 " + " • ".join(footer_parts)
+                response_message += f"\n\n💾 Recorded {len(new_redemptions)} new redemption(s)"
 
             if len(response_message) > 1900:
                 response_message = response_message[:1900] + "\n…(truncated)"
