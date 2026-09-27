@@ -3,6 +3,7 @@ from discord import app_commands
 from typing import Callable, Dict, Any
 
 from dcBot.permissions import check_permissions
+from dcBot.interaction_reply import send_followup
 from services.mightpulse_client import MightPulseClient, MightPulseError
 from services.player_sync import apply_player_info, lookup_player, refresh_all_players
 
@@ -29,7 +30,7 @@ def register_refresh_name_command(
         await interaction.response.defer(thinking=True)
 
         if not mightpulse_client.configured():
-            await interaction.followup.send("❌ MightPulse lookup isn't configured on this bot (MIGHTPULSE_API_KEY).")
+            await send_followup(interaction, "❌ MightPulse lookup isn't configured on this bot (MIGHTPULSE_API_KEY).")
             return
 
         if player_id.strip().lower() == "all":
@@ -41,14 +42,14 @@ def register_refresh_name_command(
             player = next((p for p in players if p.get("player_id") == player_id), None)
 
             if not player:
-                await interaction.followup.send(
+                await send_followup(interaction,
                     f"❌ No player found with ID `{player_id}`. Use `/list` to see all players."
                 )
                 return
 
             info = await lookup_player(player_id, mightpulse_client)
             if not info:
-                await interaction.followup.send(
+                await send_followup(interaction,
                     f"⚠️ `{player_id}` wasn't found on MightPulse — unchanged (`{player.get('player_nick', 'N/A')}`)."
                 )
                 return
@@ -60,30 +61,30 @@ def register_refresh_name_command(
             save_bot_data(bot_data)
 
             if not changes:
-                await interaction.followup.send(
+                await send_followup(interaction,
                     f"✅ `{player_id}` is already up to date: `{player.get('player_nick', 'N/A')}`"
                 )
                 return
 
-            await interaction.followup.send(
+            await send_followup(interaction,
                 f"✅ Updated `{player_id}`:\n" + "\n".join(f"• {c}" for c in changes)
             )
 
         except MightPulseError as e:
-            await interaction.followup.send(f"❌ MightPulse lookup failed: {e}")
+            await send_followup(interaction, f"❌ MightPulse lookup failed: {e}")
         except Exception as e:
-            await interaction.followup.send(f"❌ Error refreshing name: {str(e)}")
+            await send_followup(interaction, f"❌ Error refreshing name: {str(e)}")
             print(f"Error in refreshname command: {e}")
 
     async def _refresh_all(interaction: discord.Interaction):
         count = len(bot_data.get("players", []))
         if not count:
-            await interaction.followup.send("❌ No players registered.")
+            await send_followup(interaction, "❌ No players registered.")
             return
 
         position = add_queue.position()
         if position > 0:
-            await interaction.followup.send(
+            await send_followup(interaction,
                 f"⏳ Refresh of {count} player(s) queued — {position} request(s) ahead."
             )
 
@@ -97,9 +98,9 @@ def register_refresh_name_command(
                 response = "\n".join(lines)
                 if len(response) > 1900:
                     response = response[:1900] + "\n…(truncated)"
-                await interaction.followup.send(response)
+                await send_followup(interaction, response)
             except Exception as e:
-                await interaction.followup.send(f"❌ Error refreshing names: {str(e)}")
+                await send_followup(interaction, f"❌ Error refreshing names: {str(e)}")
                 print(f"Error in refreshname all: {e}")
 
         await add_queue.enqueue(do_refresh())

@@ -5,6 +5,7 @@ from typing import Callable, Dict, Any, Optional
 
 from dcBot.alliance_sync import onboard_new_members
 from dcBot.permissions import check_permissions, check_channel_only
+from dcBot.interaction_reply import send_followup
 from services.mightpulse_client import MightPulseClient, MightPulseError, MightPulseRateLimited
 from services.player_sync import (
     SyncReport,
@@ -50,17 +51,17 @@ def register_alliance_commands(
         await interaction.response.defer(thinking=True)
 
         if not mightpulse_client.configured():
-            await interaction.followup.send("❌ MightPulse isn't configured on this bot (MIGHTPULSE_API_KEY).")
+            await send_followup(interaction, "❌ MightPulse isn't configured on this bot (MIGHTPULSE_API_KEY).")
             return
 
         if not kingdom and not tracked_alliances(bot_data):
-            await interaction.followup.send("❌ No tracked alliances yet — use `/syncalliance <kingdom> <tag>`.")
+            await send_followup(interaction, "❌ No tracked alliances yet — use `/syncalliance <kingdom> <tag>`.")
             return
 
         target = f"`{kingdom}/{tag}`" if kingdom else f"{len(tracked_alliances(bot_data))} tracked alliance(s)"
         position = add_queue.position()
         if position > 0:
-            await interaction.followup.send(f"⏳ Sync of {target} queued — {position} request(s) ahead.")
+            await send_followup(interaction, f"⏳ Sync of {target} queued — {position} request(s) ahead.")
 
         async def do_sync():
             try:
@@ -71,14 +72,14 @@ def register_alliance_commands(
                             bot_data, mightpulse_client, kingdom, tag, report, add_new_members=True
                         )
                     except MightPulseRateLimited:
-                        await interaction.followup.send("🚦 MightPulse rate limit hit — try again in a minute.")
+                        await send_followup(interaction, "🚦 MightPulse rate limit hit — try again in a minute.")
                         return
                     except MightPulseError as e:
-                        await interaction.followup.send(f"❌ MightPulse error: {e}")
+                        await send_followup(interaction, f"❌ MightPulse error: {e}")
                         return
 
                     if not alliance:
-                        await interaction.followup.send(
+                        await send_followup(interaction,
                             f"❌ No alliance `{tag}` found in kingdom `{kingdom}` "
                             f"(tags are case-sensitive)."
                         )
@@ -116,7 +117,7 @@ def register_alliance_commands(
                     await _send(interaction, lines)
 
             except Exception as e:
-                await interaction.followup.send(f"❌ Error syncing alliance: {str(e)}")
+                await send_followup(interaction, f"❌ Error syncing alliance: {str(e)}")
                 print(f"Error in syncalliance: {e}")
 
         await add_queue.enqueue(do_sync())
@@ -182,4 +183,4 @@ async def _send(interaction: discord.Interaction, lines):
     message = "\n".join(lines)
     if len(message) > 1900:
         message = message[:1900] + "\n…(truncated)"
-    await interaction.followup.send(message)
+    await send_followup(interaction, message)

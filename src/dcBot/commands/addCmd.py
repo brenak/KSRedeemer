@@ -6,6 +6,7 @@ import asyncio
 import random
 
 from dcBot.permissions import check_permissions
+from dcBot.interaction_reply import send_followup
 from giftcode_api.redeem import redeem_giftcode_for_all_players, DEFAULT_KINGDOM
 from services.mightpulse_client import MightPulseClient, MightPulseError
 from services.player_sync import apply_player_info, lookup_player
@@ -49,7 +50,7 @@ def register_add_command(
 
         position = add_queue.position()
         if position > 0:
-            await interaction.followup.send(
+            await send_followup(interaction,
                 f"⏳ Request to add `{player_id}` queued — "
                 f"{position} request(s) ahead of you. You'll be notified when done."
             )
@@ -60,7 +61,7 @@ def register_add_command(
 
                 # Re-check for duplicate in case another queued add beat us here
                 if any(p.get("player_id") == player_id for p in current_players):
-                    await interaction.followup.send(
+                    await send_followup(interaction,
                         f"❌ Player `{player_id}` was already added by a concurrent request."
                     )
                     return
@@ -93,7 +94,7 @@ def register_add_command(
                     lookup_note = "\n⚠️ Player not found on MightPulse — name/alliance not looked up."
                 # An alliance sync may have registered them during the lookup
                 if any(p.get("player_id") == player_id for p in current_players):
-                    await interaction.followup.send(
+                    await send_followup(interaction,
                         f"❌ Player `{player_id}` was already added (alliance sync)."
                     )
                     return
@@ -171,10 +172,10 @@ def register_add_command(
                 if response_text:
                     final_response += f"\n\n{response_text}"
 
-                await interaction.followup.send(final_response)
+                await send_followup(interaction, final_response)
 
             except Exception as e:
-                await interaction.followup.send(f"❌ Error adding player `{player_id}`: {str(e)}")
+                await send_followup(interaction, f"❌ Error adding player `{player_id}`: {str(e)}")
                 print(f"Error in add queue worker for {player_id}: {e}")
 
         await add_queue.enqueue(do_add())

@@ -4,6 +4,7 @@ from typing import Callable, Dict, Any, Optional
 
 from dcBot.active_codes import active_codes, build_pending, redeem_pending, format_code_results
 from dcBot.permissions import check_permissions
+from dcBot.interaction_reply import send_followup
 
 
 def register_catchup_command(
@@ -27,14 +28,14 @@ def register_catchup_command(
 
         # --- Build the work list before queuing ---
         if not active_codes(bot_data):
-            await interaction.followup.send("❌ No active codes in cache to redeem.")
+            await send_followup(interaction, "❌ No active codes in cache to redeem.")
             return
 
         all_players = bot_data.get("players", [])
         if player_id:
             target = next((p for p in all_players if p.get("player_id") == player_id), None)
             if not target:
-                await interaction.followup.send(
+                await send_followup(interaction,
                     f"❌ Player `{player_id}` not found in the player list."
                 )
                 return
@@ -43,14 +44,14 @@ def register_catchup_command(
             players_to_check = list(all_players)
 
         if not players_to_check:
-            await interaction.followup.send("❌ No players registered.")
+            await send_followup(interaction, "❌ No players registered.")
             return
 
         pending = build_pending(bot_data, players_to_check)
 
         if not pending:
             scope = f"player `{player_id}`" if player_id else "all players"
-            await interaction.followup.send(
+            await send_followup(interaction,
                 f"✅ {scope.capitalize()} already has all active codes — nothing to redeem."
             )
             return
@@ -60,7 +61,7 @@ def register_catchup_command(
 
         position = add_queue.position()
         if position > 0:
-            await interaction.followup.send(
+            await send_followup(interaction,
                 f"⏳ Catchup for {scope} queued — {position} request(s) ahead. "
                 f"Will redeem {len(pending)} code(s) for up to {total_redemptions} redemption(s)."
             )
@@ -76,10 +77,10 @@ def register_catchup_command(
                 if len(response) > 1900:
                     response = response[:1900] + "\n…(truncated)"
 
-                await interaction.followup.send(response)
+                await send_followup(interaction, response)
 
             except Exception as e:
-                await interaction.followup.send(f"❌ Error during catchup: {str(e)}")
+                await send_followup(interaction, f"❌ Error during catchup: {str(e)}")
                 print(f"Error in catchup worker: {e}")
 
         await add_queue.enqueue(do_catchup())
