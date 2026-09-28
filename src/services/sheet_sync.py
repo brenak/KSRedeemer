@@ -16,8 +16,10 @@ For every sheet row with a Player ID (the in-game FID):
 - Unknown to MightPulse and not on the roster -> `notes` = "not found", no
   color change (informational, not a flagged discrepancy).
 - Known -> kept fresh regardless of the branches below (no color): the
-  name/label column gets their current nick, and `Kingdom` (if the tab has
-  one) their current kingdom -- so a server transfer shows where they went.
+  name/label column gets their current nick, and, when the tab has them,
+  `Kingdom` (so a server transfer shows where they went), `Alliance_Rank`
+  (R1-R4/Leader; their rank in their new alliance if they left),
+  `TC_Level` (TG-style, see tc_label) and `Power`.
 - Tag: `Current_Tag` is a recorded value like x/y (seeded when the row is
   added, otherwise only changed by hand). Their live tag -- this alliance's
   if they're on the roster, else their new tag, "none" (no alliance) or
@@ -73,7 +75,16 @@ NOT_FOUND_NOTE = "not found"
 # written as a self-filling formula (MEMBER_NUMBER_FORMULA), not text.
 MEMBER_NUMBER_HEADER = "Member #"
 DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Player ID", "Current_Name", "Original_Name", "Kingdom",
-                  "Current_Tag", "x", "y", "observed_tag", "observed_x", "observed_y", "notes"]
+                  "Current_Tag", "Alliance_Rank", "TC_Level", "Power", "x", "y",
+                  "observed_tag", "observed_x", "observed_y", "notes"]
+
+# Optional live stat columns -- refreshed every sync when the tab has them.
+# canonical key -> accepted header names (case-insensitive).
+STAT_COLUMN_ALIASES = {
+    "alliance_rank": ("alliance_rank", "rank"),
+    "tc_level": ("tc_level", "tc", "town_center", "town_center_level"),
+    "power": ("power",),
+}
 # Header cell that displays "Member #" and numbers every row with a Player
 # ID 1..N top-down (renumbers after sorting/filtering). The column below it
 # must stay empty for the array to fill -- which is why appended rows skip
@@ -188,13 +199,65 @@ def resolve_columns(header: List[str]) -> Dict[str, int]:
             f"Sheet header has no name column (tried: {', '.join(LABEL_COLUMN_CANDIDATES)}). "
             f"Found columns: {', '.join(header)}"
         )
-    return {**norm, "_label": label_col}
+    stat_cols = {
+        key: next(norm[a] for a in aliases if a in norm)
+        for key, aliases in STAT_COLUMN_ALIASES.items()
+        if any(a in norm for a in aliases)
+    }
+    # Canonical keys win over any header literally named the same thing.
+    return {**norm, **stat_cols, "_label": label_col}
 
 
 def _live_kingdom(member: Optional[Dict[str, Any]], player: Optional[Dict[str, Any]]) -> str:
     """Roster kid (live) first, else the player lookup's; "" if unknown."""
     kid = (member or {}).get("kid") or (player or {}).get("kid")
     return str(kid) if kid else ""
+
+
+def tc_label(level: Any) -> str:
+    """Town center level as shown in game (same mapping as kingshot_web's
+    formatCityLevel): 1-34 plain, then 5 levels per True Gold tier --
+    35 -> TG1, 36..39 -> TG1.1..TG1.4, 40 -> TG2, ... 54 -> TG4.4, 55 -> TG5."""
+    try:
+        n = int(level)
+    except (TypeError, ValueError):
+        return ""
+    if n < 35:
+        return str(n)
+    tier, sub = divmod(n - 35, 5)
+    return f"TG{tier + 1}" if sub == 0 else f"TG{tier + 1}.{sub}"
+
+
+def _live_stats(member: Optional[Dict[str, Any]], player: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Current alliance rank / TC level / power, roster first (live), else
+    the player lookup. A key is omitted when the value is unknown (so the
+    cell is left alone); "" means known-empty (e.g. rank when in no alliance)."""
+    m, p = member or {}, player or {}
+    stats: Dict[str, str] = {}
+
+    if member is not None:
+        rank = m.get("alliance_rank_label")
+    elif player is not None:
+        alliance = p.get("alliance")
+        rank = (alliance or {}).get("rank_label") if alliance else ""
+    else:
+        rank = None
+    if rank is not None:
+        stats["alliance_rank"] = rank
+
+    level = m.get("town_center_level") if m.get("town_center_level") is not None else p.get("town_center_level")
+    if level is not None:
+        stats["tc_level"] = tc_label(level)
+
+    power = m.get("power") if m.get("power") is not None else p.get("power")
+    if power is not None:
+        stats["power"] = str(int(power))
+    return stats
+
+
+def _same_cell(sheet_value: str, value: str) -> bool:
+    # Power is displayed with separators ("66,331,112"); compare digits only.
+    return sheet_value.replace(",", "") == value.replace(",", "")
 
 
 def row_player_ids(data_rows: List[List[str]], col: Dict[str, int]) -> List[int]:
@@ -258,6 +321,11 @@ def plan_sync(
                 result.kingdoms_changed += 1
             put("kingdom", row_num, kid)
 
+        # Rank / TC / power: live, only written when they actually changed.
+        for key, value in _live_stats(member, player).items():
+            if key in col and not _same_cell(cell(row, key), value):
+                put(key, row_num, value)
+
         # Tag is compared against the recorded Current_Tag (like x/y), and
         # the live one surfaces in observed_tag only when they differ.
         if member is not None:
@@ -313,6 +381,9 @@ def plan_sync(
         kid = _live_kingdom(member, player)
         if kid and "kingdom" in col:
             new_row[col["kingdom"]] = kid
+        for key, value in _live_stats(member, players.get(fid)).items():
+            if key in col and value != "":
+                new_row[col[key]] = value
         if player.get("x") is not None and player.get("y") is not None:
             # Seed x/y with where they are now, so they start out matched
             # and a later move flags gold.
@@ -392,6 +463,10 @@ def _init_header(ws, header: List[str]) -> None:
     ws.update(values=[_header_row_to_write(header)], range_name="A1", raw=False)
     ws.freeze(rows=1)
     ws.format(f"A1:{_col_letter(len(header) - 1)}1", {"textFormat": {"bold": True}})
+    norm = [h.strip().lower() for h in header]
+    if "power" in norm:
+        p = _col_letter(norm.index("power"))
+        ws.format(f"{p}2:{p}", {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}})
     # Whole-sheet basic filter (no range = every row, incl. ones appended
     # later), so the header gets filter/sort dropdowns like the original tab.
     ws.set_basic_filter()
