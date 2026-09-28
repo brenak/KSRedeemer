@@ -69,6 +69,8 @@ MISMATCH_COLOR = "fbbc04"
 # Google Sheets' own standard palette swatch "light purple 1".
 NOT_IN_ALLIANCE_COLOR = "8e7cc3"
 NOT_FOUND_NOTE = "not found"
+# Power shown as 235,248,429 -- applied to the Power column on every write.
+POWER_NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
 # Font applied to a new/blank tab (Sheets' own default is Arial 10).
 TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
@@ -155,6 +157,7 @@ class SyncPlan:
     new_rows: List[List[Optional[str]]]   # None = leave cell untouched
     new_row_colors: List[Optional[str]]   # parallel to new_rows (None = no color)
     highlight_end: str                    # last highlighted column letter
+    power_col: Optional[str] = None       # Power column letter, if the tab has one
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -399,7 +402,8 @@ def plan_sync(
         result.new_member_nicks.append(nick or f"fid={fid}")
 
     highlight_end = _col_letter(max(col["observed_x"], col["observed_y"]))
-    return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end)
+    power_col = _col_letter(col["power"]) if "power" in col else None
+    return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col)
 
 
 def configured() -> bool:
@@ -474,10 +478,6 @@ def _init_header(ws, header: List[str]) -> None:
     # ws.format replaces the whole textFormat, so the font must ride along
     # with bold or the header would fall back to the default font.
     ws.format(f"A1:{_col_letter(len(header) - 1)}1", {"textFormat": {"bold": True, **TAB_FONT}})
-    norm = [h.strip().lower() for h in header]
-    if "power" in norm:
-        p = _col_letter(norm.index("power"))
-        ws.format(f"{p}2:{p}", {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}})
     # Whole-sheet basic filter (no range = every row, incl. ones appended
     # later), so the header gets filter/sort dropdowns like the original tab.
     ws.set_basic_filter()
@@ -528,12 +528,17 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
         if start is not None:
             colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
 
-    if colors:
-        ws.batch_format([
-            {"range": f"A{row_num}:{plan.highlight_end}{row_num}",
-             "format": {"backgroundColor": _hex_to_rgb_float(color)}}
-            for row_num, color in colors
-        ])
+    formats = [
+        {"range": f"A{row_num}:{plan.highlight_end}{row_num}",
+         "format": {"backgroundColor": _hex_to_rgb_float(color)}}
+        for row_num, color in colors
+    ]
+    if plan.power_col:
+        # Every run, not just on new tabs, so a hand-added Power column gets
+        # thousands separators too. Only the number format field is touched.
+        formats.append({"range": f"{plan.power_col}2:{plan.power_col}", "format": POWER_NUMBER_FORMAT})
+    if formats:
+        ws.batch_format(formats)
 
 
 async def sync_alliance_sheet(
