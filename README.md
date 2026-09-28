@@ -187,12 +187,16 @@ Roster members missing from the tab are appended with Player ID, name, `Original
 
 `Member #` is a formula in the header cell, `={"Member #"; ARRAYFORMULA(IF(C2:C="", , ROW(C2:C)-1))}` (`C` = the `Player ID` column on new tabs; use whichever column it is on yours), that numbers every row with a Player ID 1…N from the top; it renumbers after sorting or filtering. To add it to an existing tab, put that in the header cell and leave the cells below it empty. Avoid something like `=SEQUENCE(100)` below the header: it fills rows that have no member, so the sync's new rows land after row 100. The sync never writes into cells it has no value for, so it can't break this or any other formula column. You can add your own columns after these; highlighting stops at `observed_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `observed_x`, `observed_y`, `observed_tag` and `notes`; `Kingdom`, `Current_Tag`, `Rank`, `TC_Level` and `Power` are optional — add any of those headers to an existing tab and the next sync fills them in (without `Current_Tag`, `observed_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
 
+**Layout.** Every sync also fits all columns to their contents, centers `Current_Tag` and `observed_tag`, and left-aligns `Rank` and `TC_Level`, so existing tabs get the same layout as new ones.
+
 **Daily auto-sync.** Once a day (`SHEET_AUTO_SYNC_HOURS`, default 24; `0` = off) the bot runs a full `/sheet sync` of every tab plus Analytics on its own, through the same queue as the commands, and posts a one-line-per-tab summary (🟩 matched · 🟨 moved · 🟪 left · ➕ added) to the bot channel. It's checked hourly and timed from the last run, which is saved, so restarts don't cause extra runs; `/sheet list` shows when it last ran. It costs the same MightPulse requests as a manual full sync, about 1.1s per member.
 
 **Analytics tab.** After every real `/sheet sync` (not dry runs), and on `/sheet analytics`, the bot rewrites an `Analytics` tab comparing **all** configured alliances — even ones not synced in that run:
 
 - a summary table, one row per alliance: Alliance, Kingdom, Members, TG5, TG4, TG3, TG2, TG1, Below TG1, Total Power, Avg Power, Top Power (TG buckets: TG5 = level 55+, TG4 = 50–54, TG3 = 45–49, TG2 = 40–44, TG1 = 35–39)
 - a **TG5 pie** (share of TG5 players by alliance), a **total power bar chart**, and a **stacked bar of town center levels** per alliance
+
+Alliances with under **5 billion** total power are left off the table and charts (a note under the table lists them). The `Analytics` tab is kept as the first tab in the spreadsheet.
 
 It's built from each alliance's live roster (current members only), reusing the rosters the sync just fetched, so it usually costs no extra MightPulse requests — at most one per alliance. The charts are deleted and recreated on each update so they always match the table; edits to them (and anything typed into the tab) are overwritten. The alliance label is the tag, with the kingdom added when two tracked alliances share a tag. `Analytics` can't be used as an alliance tab name.
 

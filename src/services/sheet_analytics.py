@@ -26,6 +26,9 @@ from services.sheet_sync import (
 )
 
 ANALYTICS_TAB = "Analytics"
+# Alliances below this total power are left off the table and charts (and
+# noted under the table), so small alliances don't clutter the comparison.
+MIN_TOTAL_POWER = 5_000_000_000
 
 # TC buckets for the stacked bar, highest first. TG5 counts 55+ so a future
 # TG6 isn't silently dropped.
@@ -159,7 +162,7 @@ def _get_or_create_tab(sh):
     try:
         return sh.worksheet(ANALYTICS_TAB)
     except gspread.exceptions.WorksheetNotFound:
-        return sh.add_worksheet(title=ANALYTICS_TAB, rows=60, cols=len(HEADER))
+        return sh.add_worksheet(title=ANALYTICS_TAB, rows=60, cols=len(HEADER), index=0)
 
 
 def _existing_chart_ids(sh, sheet_id: int) -> List[int]:
@@ -194,6 +197,8 @@ def write_analytics(stats: List[AllianceStats], notes: List[str]) -> None:
                         "fields": "userEnteredFormat.textFormat"}},
         {"updateSheetProperties": {"properties": {"sheetId": ws.id, "gridProperties": {"frozenRowCount": 1}},
                                    "fields": "gridProperties.frozenRowCount"}},
+        # Keep Analytics as the first tab (no-op if it already is).
+        {"updateSheetProperties": {"properties": {"sheetId": ws.id, "index": 0}, "fields": "index"}},
     ]
     for name in POWER_COLUMNS:
         c = COL[name]
@@ -225,6 +230,7 @@ async def update_analytics(
     cache = roster_cache if roster_cache is not None else {}
     stats: List[AllianceStats] = []
     notes: List[str] = []
+    below_min = 0
     for target, label in zip(targets, alliance_labels(targets)):
         key = roster_key(target["kid"], target["tag"])
         try:
@@ -239,10 +245,18 @@ async def update_analytics(
         if not roster or not roster.get("alliance"):
             notes.append(f"{label}: skipped (alliance not found on MightPulse)")
             continue
-        stats.append(compute_stats(label, target["kid"], roster))
+        s = compute_stats(label, target["kid"], roster)
+        if s.total_power < MIN_TOTAL_POWER:
+            below_min += 1
+            notes.append(f"{label}: not shown (total power {s.total_power:,} is under "
+                         f"{MIN_TOTAL_POWER / 1e9:g} billion)")
+            continue
+        stats.append(s)
 
     await asyncio.to_thread(write_analytics, stats, notes)
     summary = f"📊 `{ANALYTICS_TAB}` tab updated — {len(stats)} alliance(s)"
-    if notes:
-        summary += f", {len(notes)} skipped"
+    if below_min:
+        summary += f", {below_min} under {MIN_TOTAL_POWER / 1e9:g}B power not shown"
+    if len(notes) > below_min:
+        summary += f", {len(notes) - below_min} skipped"
     return summary
