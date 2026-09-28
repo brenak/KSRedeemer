@@ -64,6 +64,8 @@ class PowerContext:
     week_ago: Dict[int, int] = field(default_factory=dict)    # fid -> power >= 7 days ago
     checkpoint_label: Optional[str] = None                     # when the checkpoint was taken
     first_snapshot: Optional[str] = None                       # earliest date on record
+    recorded: Optional[int] = None                             # rows added this run (None = read-only)
+    history_days: int = 0                                      # distinct snapshot dates on record
 
 
 @dataclass
@@ -207,12 +209,16 @@ def prepare_power(sh, bot_data: Dict[str, Any], rosters, superseded, record: boo
     """Load history, optionally record today's snapshot, build the context."""
     today = today_str()
     history = load_history(sh)
+    new_rows: List[List[Any]] = []
     if record:
         already = {int(r[3]) for r in history if r[0] == today and len(r) > 3 and r[3].isdigit()}
         new_rows = snapshot_rows(rosters, superseded, today, already)
         record_snapshot(sh, new_rows, history, today)
         history = history + [[str(c) for c in r] for r in new_rows]
-    return build_context(history, bot_data.get("power_checkpoint"), today)
+    ctx = build_context(history, bot_data.get("power_checkpoint"), today)
+    ctx.recorded = len(new_rows) if record else None
+    ctx.history_days = len({r[0] for r in history})
+    return ctx
 
 
 def take_checkpoint(bot_data: Dict[str, Any], rosters, superseded) -> int:

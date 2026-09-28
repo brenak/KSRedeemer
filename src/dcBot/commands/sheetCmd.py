@@ -57,7 +57,12 @@ async def load_power(bot_data: Dict[str, Any], roster_cache: Dict[Any, Any], rec
     try:
         sh = await asyncio.to_thread(open_spreadsheet)
         superseded = superseded_members(roster_cache)
-        return await asyncio.to_thread(prepare_power, sh, bot_data, roster_cache, superseded, record)
+        ctx = await asyncio.to_thread(prepare_power, sh, bot_data, roster_cache, superseded, record)
+        if ctx.recorded is not None:
+            what = (f"{ctx.recorded} players recorded" if ctx.recorded
+                    else "already recorded today, nothing new")
+            print(f"📈 Power snapshot {ctx.today}: {what} (history: {ctx.history_days} day(s))")
+        return ctx
     except Exception as e:
         print(f"⚠️ Power growth tracking skipped: {e}")
         return None
@@ -77,8 +82,11 @@ async def run_analytics(
             roster_cache = roster_cache if roster_cache is not None else {}
             await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
             power_ctx = await load_power(bot_data, roster_cache, record=False)
-        return await update_analytics(client, list(sheet_targets(bot_data)), roster_cache, power_ctx)
+        summary = await update_analytics(client, list(sheet_targets(bot_data)), roster_cache, power_ctx)
+        print(summary.replace("`", ""))
+        return summary
     except SheetSyncError as e:
+        print(f"❌ Analytics: {e}")
         return f"❌ Analytics: {e}"
     except Exception as e:
         print(f"Error updating analytics: {e}")
@@ -112,6 +120,7 @@ async def run_sheet_sync(
                 client, t["kid"], t["tag"], t["tab"],
                 dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache, power_ctx=power_ctx,
             )
+            print(f"📋 Sheet sync {t['tab']}{' (dry run)' if dry_run else ''}: {result.compact_summary()}")
             if compact:
                 lines.append(f"✅ `{t['tab']}` — {result.compact_summary()}")
                 continue
@@ -122,6 +131,7 @@ async def run_sheet_sync(
             message = "\n".join([header] + result.summary_lines())
         except SheetSyncError as e:
             message = f"❌ {_describe(t)}: {e}"
+            print(f"❌ Sheet sync {t['tab']}: {e}")
         except Exception as e:
             message = f"❌ {_describe(t)}: {str(e)}"
             print(f"Error in sheet sync ({t['tab']}): {e}")
@@ -264,6 +274,7 @@ def register_sheet_commands(
                 previous = (bot_data.get("power_checkpoint") or {}).get("at")
                 count = take_checkpoint(bot_data, rosters, superseded_members(rosters))
                 save_bot_data(bot_data)
+                print(f"📍 Power checkpoint {bot_data['power_checkpoint']['at']}: {count} players")
                 lines = [f"📍 **Checkpoint taken** — {bot_data['power_checkpoint']['at']}",
                          f"Recorded power for {count} player(s). `Growth %` now counts from here "
                          f"(shows on the next `/sheet sync` or daily sync)."]
