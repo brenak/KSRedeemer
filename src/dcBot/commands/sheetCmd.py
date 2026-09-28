@@ -8,9 +8,9 @@ with /sheet add / remove / list.
 
 import discord
 from discord import app_commands
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from config.config import SHEET_DEFAULT_KINGDOM, SHEET_DEFAULT_TAB, SHEET_DEFAULT_TAG
+from config.config import SHEET_AUTO_SYNC_HOURS, SHEET_DEFAULT_KINGDOM, SHEET_DEFAULT_TAB, SHEET_DEFAULT_TAG
 from dcBot.interaction_reply import send_followup
 from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
@@ -37,6 +37,74 @@ def _find_target(bot_data: Dict[str, Any], tab: str) -> Optional[Dict[str, str]]
 
 def _describe(t: Dict[str, str]) -> str:
     return f"tab `{t['tab']}` ← `[{t['tag']}]` kingdom `{t['kid']}`"
+
+
+async def run_analytics(
+    bot_data: Dict[str, Any], client: MightPulseClient, roster_cache: Optional[Dict[Any, Any]] = None
+) -> str:
+    """Refresh the Analytics tab for every target; returns a status line."""
+    try:
+        return await update_analytics(client, list(sheet_targets(bot_data)), roster_cache)
+    except SheetSyncError as e:
+        return f"❌ Analytics: {e}"
+    except Exception as e:
+        print(f"Error updating analytics: {e}")
+        return f"❌ Analytics: {str(e)}"
+
+
+async def run_sheet_sync(
+    bot_data: Dict[str, Any],
+    client: MightPulseClient,
+    targets: List[Dict[str, str]],
+    dry_run: bool,
+    send: Callable[[str], Awaitable[None]],
+    compact: bool = False,
+) -> None:
+    """Sync each target tab in turn, then (unless dry run) the Analytics
+    tab. Used by /sheet sync (a full message per tab, sent as it finishes)
+    and the daily auto-sync (compact: one combined message at the end).
+    Never raises -- per-tab failures are reported and the rest continue."""
+    player_cache: Dict[int, Any] = {}  # shared so no one is looked up twice
+    roster_cache: Dict[Any, Any] = {}  # reused by the Analytics tab below
+    lines: List[str] = []
+    for t in targets:
+        try:
+            result = await sync_alliance_sheet(
+                client, t["kid"], t["tag"], t["tab"],
+                dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache,
+            )
+            if compact:
+                lines.append(f"✅ `{t['tab']}` — {result.compact_summary()}")
+                continue
+            header = (
+                f"📋 **[dry run — nothing written] {_describe(t)}**"
+                if dry_run else f"📋 **Synced {_describe(t)}**"
+            )
+            message = "\n".join([header] + result.summary_lines())
+        except SheetSyncError as e:
+            message = f"❌ {_describe(t)}: {e}"
+        except Exception as e:
+            message = f"❌ {_describe(t)}: {str(e)}"
+            print(f"Error in sheet sync ({t['tab']}): {e}")
+        if compact:
+            lines.append(message)
+            continue
+        if len(message) > 1900:
+            message = message[:1900] + "\n…(truncated)"
+        await send(message)
+
+    # Analytics covers every target, not just the ones synced now; rosters
+    # fetched above are reused, the rest cost one call each.
+    if not dry_run:
+        analytics = await run_analytics(bot_data, client, roster_cache)
+        if compact:
+            lines.append(analytics)
+        else:
+            await send(analytics)
+
+    if compact and lines:
+        message = "\n".join(lines)
+        await send(message[:1900] + ("\n…(truncated)" if len(message) > 1900 else ""))
 
 
 def register_sheet_commands(
@@ -100,43 +168,15 @@ def register_sheet_commands(
         )
 
         async def do_sync():
-            player_cache: Dict[int, Any] = {}  # shared so no one is looked up twice
-            roster_cache: Dict[Any, Any] = {}  # reused by the Analytics tab below
-            for t in targets:
-                try:
-                    result = await sync_alliance_sheet(
-                        mightpulse_client, t["kid"], t["tag"], t["tab"],
-                        dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache,
-                    )
-                    header = (
-                        f"📋 **[dry run — nothing written] {_describe(t)}**"
-                        if dry_run else f"📋 **Synced {_describe(t)}**"
-                    )
-                    message = "\n".join([header] + result.summary_lines())
-                except SheetSyncError as e:
-                    message = f"❌ {_describe(t)}: {e}"
-                except Exception as e:
-                    message = f"❌ {_describe(t)}: {str(e)}"
-                    print(f"Error in sheet sync ({t['tab']}): {e}")
-                if len(message) > 1900:
-                    message = message[:1900] + "\n…(truncated)"
+            async def send(message: str):
                 await send_followup(interaction, message)
 
-            # Analytics covers every target, not just the ones synced now;
-            # rosters fetched above are reused, the rest cost one call each.
-            if not dry_run:
-                await send_followup(interaction, await _run_analytics(roster_cache))
+            await run_sheet_sync(bot_data, mightpulse_client, targets, dry_run, send)
 
         await add_queue.enqueue(do_sync())
 
-    async def _run_analytics(roster_cache: Optional[Dict[Any, Any]] = None) -> str:
-        try:
-            return await update_analytics(mightpulse_client, list(sheet_targets(bot_data)), roster_cache)
-        except SheetSyncError as e:
-            return f"❌ Analytics: {e}"
-        except Exception as e:
-            print(f"Error updating analytics: {e}")
-            return f"❌ Analytics: {str(e)}"
+    async def _run_analytics() -> str:
+        return await run_analytics(bot_data, mightpulse_client)
 
     @group.command(name="analytics", description=f"Refresh the {ANALYTICS_TAB} tab (one roster request per alliance)")
     async def sheet_analytics(interaction: discord.Interaction):
@@ -221,8 +261,15 @@ def register_sheet_commands(
         if not targets:
             await interaction.response.send_message("No sheet targets configured. Add one with `/sheet add`.")
             return
+        if SHEET_AUTO_SYNC_HOURS > 0:
+            last = bot_data.get("botConfig", {}).get("last_sheet_auto_sync")
+            auto = (f"Auto-sync every {SHEET_AUTO_SYNC_HOURS}h · last run "
+                    + (f"`{last[:16].replace('T', ' ')}`" if last else "not yet"))
+        else:
+            auto = "Auto-sync is off (SHEET_AUTO_SYNC_HOURS=0)"
         await interaction.response.send_message(
             "📋 **Sheet sync targets**\n" + "\n".join(f"• {_describe(t)}" for t in targets)
+            + f"\n-# {auto}"
         )
 
     tree.add_command(group)

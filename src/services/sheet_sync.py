@@ -118,6 +118,18 @@ class SyncResult:
     tab_setup: str = ""
     dry_run: bool = False
 
+    def compact_summary(self) -> str:
+        """One line for the daily auto-sync post."""
+        parts = [f"🟩{self.matched}", f"🟨{self.mismatched}", f"🟪{self.not_in_alliance}",
+                 f"➕{self.new_members_added}"]
+        if self.kingdoms_changed:
+            parts.append(f"🌍{self.kingdoms_changed} transferred")
+        if self.skipped_not_found:
+            parts.append(f"⚠️{self.skipped_not_found} not found")
+        if self.tab_setup:
+            parts.append("🆕 new tab")
+        return " ".join(parts)
+
     def summary_lines(self) -> List[str]:
         lines = []
         if self.tab_setup == "created":

@@ -147,6 +147,7 @@ docker compose logs -f
 | `GOOGLE_SHEETS_CREDENTIALS_PATH` | ❌ No | `/app/secrets/google-service-account.json` (compose) | Google service-account JSON key for `/sheet sync`. |
 | `GOOGLE_SHEET_ID` | ❌ No | the alliance roster spreadsheet | Spreadsheet ID (between `/d/` and `/edit` in its URL). All tabs live in this one spreadsheet. |
 | `SHEET_DEFAULT_KINGDOM` / `SHEET_DEFAULT_TAG` / `SHEET_DEFAULT_TAB` | ❌ No | `1343` / `1MK` / `1MK` | The first alliance → tab target. Only seeds the list the first time; after that it's managed with `/sheet add` / `/sheet remove` and stored in `botData.json`. Tag is case-sensitive. |
+| `SHEET_AUTO_SYNC_HOURS` | ❌ No | `24` | Run a full `/sheet sync` (every tab + Analytics) automatically every N hours and post a summary to the bot channel. `0` turns it off. |
 
 ### MightPulse rate limits
 
@@ -185,6 +186,8 @@ Roster members missing from the tab are appended with Player ID, name, `Original
 **Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Member #`, `Kingdom`, `Player ID`, `Original_Name`, `Current_Name`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `x`, `y`, `observed_tag`, `observed_x`, `observed_y`, `notes` — bolded, frozen and filterable, with the whole tab in Arial 11 — then adds every member.
 
 `Member #` is a formula in the header cell, `={"Member #"; ARRAYFORMULA(IF(C2:C="", , ROW(C2:C)-1))}` (`C` = the `Player ID` column on new tabs; use whichever column it is on yours), that numbers every row with a Player ID 1…N from the top; it renumbers after sorting or filtering. To add it to an existing tab, put that in the header cell and leave the cells below it empty. Avoid something like `=SEQUENCE(100)` below the header: it fills rows that have no member, so the sync's new rows land after row 100. The sync never writes into cells it has no value for, so it can't break this or any other formula column. You can add your own columns after these; highlighting stops at `observed_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `observed_x`, `observed_y`, `observed_tag` and `notes`; `Kingdom`, `Current_Tag`, `Rank`, `TC_Level` and `Power` are optional — add any of those headers to an existing tab and the next sync fills them in (without `Current_Tag`, `observed_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
+
+**Daily auto-sync.** Once a day (`SHEET_AUTO_SYNC_HOURS`, default 24; `0` = off) the bot runs a full `/sheet sync` of every tab plus Analytics on its own, through the same queue as the commands, and posts a one-line-per-tab summary (🟩 matched · 🟨 moved · 🟪 left · ➕ added) to the bot channel. It's checked hourly and timed from the last run, which is saved, so restarts don't cause extra runs; `/sheet list` shows when it last ran. It costs the same MightPulse requests as a manual full sync, about 1.1s per member.
 
 **Analytics tab.** After every real `/sheet sync` (not dry runs), and on `/sheet analytics`, the bot rewrites an `Analytics` tab comparing **all** configured alliances — even ones not synced in that run:
 

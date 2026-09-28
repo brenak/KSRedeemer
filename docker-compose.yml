@@ -15,6 +15,7 @@ services:
       - SHEET_DEFAULT_KINGDOM=${SHEET_DEFAULT_KINGDOM:-1343}
       - SHEET_DEFAULT_TAG=${SHEET_DEFAULT_TAG:-1MK}
       - SHEET_DEFAULT_TAB=${SHEET_DEFAULT_TAB:-1MK}
+      - SHEET_AUTO_SYNC_HOURS=${SHEET_AUTO_SYNC_HOURS:-24}
     volumes:
       - kingshot-data:/app/data
       - ./secrets:/app/secrets:ro

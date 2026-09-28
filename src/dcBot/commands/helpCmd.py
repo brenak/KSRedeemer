@@ -113,6 +113,7 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "manage which alliance goes in which tab\n"
                     "• Also refreshes the `Analytics` tab (TG5 pie, power & TC charts); "
                     "`/sheet analytics` refreshes just that\n"
+                    "• Runs automatically once a day (posts a summary here)\n"
                     "• 🟩 position matches · 🟨 position changed (see `observed_x/y`) · "
                     "🟪 left the alliance (see `observed_tag`)\n"
                     "• Updates names and `Kingdom`, adds missing members; never changes `x`/`y`/`Current_Tag` "

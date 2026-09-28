@@ -22,6 +22,7 @@ from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
 from dcBot.gift_code_cache import GiftCodeCacheManager
 from dcBot.alliance_sync import AllianceSyncManager
+from dcBot.sheet_auto_sync import SheetAutoSyncManager
 from dcBot.add_queue import AddQueue
 from services.mightpulse_client import MightPulseClient
 from config.config import DISCORD_GUILD_ID
@@ -72,6 +73,9 @@ def init_bot(token: str) -> tuple[discord.Client, MightPulseClient]:
     cache_manager = GiftCodeCacheManager(client, bot_data, save_bot_data_with_players, mightpulse_client)
     client.gift_code_cache = cache_manager
     client.alliance_sync = AllianceSyncManager(
+        client, bot_data, save_bot_data_with_players, mightpulse_client, add_queue
+    )
+    client.sheet_auto_sync = SheetAutoSyncManager(
         client, bot_data, save_bot_data_with_players, mightpulse_client, add_queue
     )
     register_set_check_interval_command(tree, bot_data, cache_manager)

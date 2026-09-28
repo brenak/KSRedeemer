@@ -30,6 +30,8 @@ GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "1EQaEx2ISCMAQmHsd71S-GcCoLL58ZJx
 SHEET_DEFAULT_KINGDOM = os.getenv("SHEET_DEFAULT_KINGDOM", "1343").strip()
 SHEET_DEFAULT_TAG = os.getenv("SHEET_DEFAULT_TAG", "1MK").strip()
 SHEET_DEFAULT_TAB = os.getenv("SHEET_DEFAULT_TAB", "1MK").strip()
+# Automatic full /sheet sync (every tab + Analytics) every N hours; 0 = off.
+SHEET_AUTO_SYNC_HOURS = max(0, int(os.getenv("SHEET_AUTO_SYNC_HOURS", "24") or 0))
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
