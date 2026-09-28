@@ -59,6 +59,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.config import GOOGLE_SHEETS_CREDENTIALS_PATH, GOOGLE_SHEET_ID
 from services.mightpulse_client import MightPulseClient, MightPulseError, MightPulseRateLimited
+from services.power_growth import FLAG_COLOR, PowerContext, alliance_growth
 
 REQUIRED_COLUMNS = ("player id", "x", "y", "observed_x", "observed_y", "observed_tag",
                     "notes", "original_name")
@@ -90,7 +91,7 @@ COLUMN_ALIGNMENT = {
 DEPARTED_SECTION_ROW = 102
 # Extra width per column on top of Google's auto-fit, for the header's
 # filter dropdown button (auto-fit doesn't account for it).
-FILTER_BUTTON_PX = 28
+FILTER_BUTTON_PX = 14
 # Font applied to a new/blank tab (Sheets' own default is Arial 10).
 TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
@@ -99,7 +100,7 @@ TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 # written as a self-filling formula (MEMBER_NUMBER_FORMULA), not text.
 MEMBER_NUMBER_HEADER = "Member #"
 DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Kingdom", "Player ID", "Original_Name", "Current_Name",
-                  "Current_Tag", "Rank", "TC_Level", "Power", "x", "y",
+                  "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %", "x", "y",
                   "observed_tag", "observed_x", "observed_y", "notes"]
 
 # Optional live stat columns -- refreshed every sync when the tab has them.
@@ -108,6 +109,18 @@ STAT_COLUMN_ALIASES = {
     "alliance_rank": ("alliance_rank", "rank"),
     "tc_level": ("tc_level", "tc", "town_center", "town_center_level"),
     "power": ("power",),
+}
+# Optional growth columns (services/power_growth.py), filled for members
+# every sync; canonical key -> accepted header names.
+GROWTH_COLUMN_ALIASES = {
+    "growth_pct": ("growth %", "growth_pct", "growth"),
+    "vs_alliance": ("vs alliance", "vs_alliance"),
+    "week_pct": ("7d growth %", "7d_growth_pct", "7d growth"),
+}
+GROWTH_NUMBER_FORMATS = {
+    "growth_pct": {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}},
+    "week_pct": {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}},
+    "vs_alliance": {"numberFormat": {"type": "NUMBER", "pattern": '0.0"×"'}},
 }
 # Header cell that displays "Member #" and numbers every row with a Player
 # ID 1..N top-down (renumbers after sorting/filtering). The column below it
@@ -134,6 +147,7 @@ class SyncResult:
     skipped_not_found: int = 0
     new_members_added: int = 0
     new_member_nicks: List[str] = field(default_factory=list)
+    flagged_nicks: List[str] = field(default_factory=list)   # growing much faster than the alliance
     # "created" (tab didn't exist) / "initialized" (tab was blank) / ""
     tab_setup: str = ""
     dry_run: bool = False
@@ -144,6 +158,8 @@ class SyncResult:
                  f"⬜{self.position_unknown}", f"➕{self.new_members_added}"]
         if self.kingdoms_changed:
             parts.append(f"🌍{self.kingdoms_changed} transferred")
+        if self.flagged_nicks:
+            parts.append(f"🔴{len(self.flagged_nicks)} growing fast")
         if self.skipped_not_found:
             parts.append(f"⚠️{self.skipped_not_found} not found")
         if self.tab_setup:
@@ -174,6 +190,9 @@ class SyncResult:
             lines.append(f"⚠️ Not found on MightPulse: {self.skipped_not_found}")
         if self.skipped_no_player_id:
             lines.append(f"⏭️ Rows without a Player ID: {self.skipped_no_player_id}")
+        if self.flagged_nicks:
+            names = ", ".join(f"`{n}`" for n in self.flagged_nicks[:25])
+            lines.append(f"🔴 Growing much faster than the alliance (likely spending): {names}")
         if self.new_member_nicks:
             names = ", ".join(f"`{n}`" for n in self.new_member_nicks[:25])
             more = f" (+{len(self.new_member_nicks) - 25} more)" if len(self.new_member_nicks) > 25 else ""
@@ -192,6 +211,8 @@ class SyncPlan:
     power_col: Optional[str] = None       # Power column letter, if the tab has one
     inactive_rows: List[int] = field(default_factory=list)   # existing rows (1-indexed) with no position
     departed_rows: List[int] = field(default_factory=list)   # existing rows not on the roster (left / not found)
+    column_formats: List[Tuple[str, Dict[str, Any]]] = field(default_factory=list)  # (column letter, number format)
+    flag_cells: List[Tuple[int, str]] = field(default_factory=list)                 # (row, column letter) -> FLAG_COLOR
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -240,7 +261,7 @@ def resolve_columns(header: List[str]) -> Dict[str, int]:
         )
     stat_cols = {
         key: next(norm[a] for a in aliases if a in norm)
-        for key, aliases in STAT_COLUMN_ALIASES.items()
+        for key, aliases in {**STAT_COLUMN_ALIASES, **GROWTH_COLUMN_ALIASES}.items()
         if any(a in norm for a in aliases)
     }
     # Canonical keys win over any header literally named the same thing.
@@ -294,6 +315,15 @@ def _live_stats(member: Optional[Dict[str, Any]], player: Optional[Dict[str, Any
     return stats
 
 
+def _growth_values(g: Any) -> Dict[str, Any]:
+    """Sheet values for a power_growth.Growth: fractions / multiples as
+    numbers (formatted as % / "x" by GROWTH_NUMBER_FORMATS), "" when there's
+    no baseline yet so a stale value doesn't linger."""
+    def num(v: Optional[float], digits: int) -> Any:
+        return round(v, digits) if v is not None else ""
+    return {"growth_pct": num(g.growth_pct, 4), "vs_alliance": num(g.vs_alliance, 2), "week_pct": num(g.week_pct, 4)}
+
+
 def _same_cell(sheet_value: str, value: str) -> bool:
     # Power is displayed with separators ("66,331,112"); compare digits only.
     return sheet_value.replace(",", "") == value.replace(",", "")
@@ -310,6 +340,7 @@ def plan_sync(
     roster: Dict[int, Dict[str, Any]],
     players: Dict[int, Optional[Dict[str, Any]]],
     moved_to: Optional[Dict[int, Dict[str, Any]]] = None,
+    growth: Optional[Dict[int, Any]] = None,
 ) -> SyncPlan:
     """Pure decision logic. `roster` maps FID -> roster member for the
     target alliance; `players` maps FID -> MightPulse `player` object (None
@@ -317,10 +348,12 @@ def plan_sync(
     players a *fresher* roster of another tracked alliance also lists (see
     superseded_members): they count as having left this one."""
     moved_to = moved_to or {}
+    growth = growth or {}
     col = resolve_columns(header)
     result = SyncResult()
     value_updates: List[Dict[str, Any]] = []
     row_colors: List[Tuple[int, str]] = []
+    flag_cells: List[Tuple[int, str]] = []
     inactive_rows: List[int] = []
     departed_rows: List[int] = []
     seen: set = set()
@@ -374,6 +407,18 @@ def plan_sync(
         for key, value in _live_stats(roster_entry or None, player).items():
             if key in col and not _same_cell(cell(row, key), value):
                 put(key, row_num, value)
+
+        # Growth since the checkpoint / over the week (members only): live,
+        # rewritten every sync; the vs Alliance cell turns red when flagged.
+        g = growth.get(pid) if member is not None else None
+        if g is not None:
+            for key, value in _growth_values(g).items():
+                if key in col:
+                    put(key, row_num, value)
+            if g.flagged:
+                result.flagged_nicks.append(nick or str(pid))
+                if "vs_alliance" in col:
+                    flag_cells.append((row_num, _col_letter(col["vs_alliance"])))
 
         # Tag is compared against the recorded Current_Tag (like x/y), and
         # the live one surfaces in observed_tag only when they differ.
@@ -438,6 +483,10 @@ def plan_sync(
         for key, value in _live_stats(member, players.get(fid)).items():
             if key in col and value != "":
                 new_row[col[key]] = value
+        if fid in growth:
+            for key, value in _growth_values(growth[fid]).items():
+                if key in col and value != "":
+                    new_row[col[key]] = value
         if player.get("x") is not None and player.get("y") is not None:
             # Seed x/y with where they are now, so they start out matched
             # and a later move flags gold.
@@ -453,8 +502,9 @@ def plan_sync(
 
     highlight_end = _col_letter(max(col["observed_x"], col["observed_y"]))
     power_col = _col_letter(col["power"]) if "power" in col else None
+    column_formats = [(_col_letter(col[k]), f) for k, f in GROWTH_NUMBER_FORMATS.items() if k in col]
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
-                    inactive_rows, departed_rows)
+                    inactive_rows, departed_rows, column_formats, flag_cells)
 
 
 def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
@@ -658,6 +708,11 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
         # Every run, not just on new tabs, so a hand-added Power column gets
         # thousands separators too. Only the number format field is touched.
         formats.append({"range": f"{plan.power_col}2:{plan.power_col}", "format": POWER_NUMBER_FORMAT})
+    for letter, number_format in plan.column_formats:
+        formats.append({"range": f"{letter}2:{letter}", "format": number_format})
+    # After the row colors, so a flagged vs Alliance cell stays red.
+    formats += [{"range": f"{letter}{row_num}", "format": {"backgroundColor": _hex_to_rgb_float(FLAG_COLOR)}}
+                for row_num, letter in plan.flag_cells]
     if formats:
         ws.batch_format(formats)
 
@@ -806,6 +861,7 @@ async def sync_alliance_sheet(
     dry_run: bool = False,
     player_cache: Optional[Dict[int, Optional[Dict[str, Any]]]] = None,
     roster_cache: Optional[Dict[Tuple[str, str], Optional[Dict[str, Any]]]] = None,
+    power_ctx: Optional[PowerContext] = None,
 ) -> SyncResult:
     """Read one tab, fetch roster + per-player data from MightPulse, write
     the result back. Nothing is written unless every MightPulse request
@@ -858,7 +914,11 @@ async def sync_alliance_sheet(
     # really moved there (needs the other rosters in roster_cache -- the
     # /sheet commands prefetch every tracked alliance for exactly this).
     moved_to = superseded_members(roster_cache).get(key, {}) if roster_cache else {}
-    plan = plan_sync(header, data_rows, roster_abbr, roster, players, moved_to)
+    # Power growth vs this alliance's median, over current members only.
+    growth = None
+    if power_ctx is not None:
+        growth, _median = alliance_growth([m for f, m in roster.items() if f not in moved_to], power_ctx)
+    plan = plan_sync(header, data_rows, roster_abbr, roster, players, moved_to, growth)
     plan.result.dry_run = dry_run
     if fresh:
         plan.result.tab_setup = "created" if ws is None else "initialized"

@@ -6,6 +6,8 @@ SHEET_DEFAULT_KINGDOM / _TAG / _TAB the first time it's needed, and managed
 with /sheet add / remove / list.
 """
 
+import asyncio
+
 import discord
 from discord import app_commands
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -15,7 +17,15 @@ from dcBot.interaction_reply import send_followup
 from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
 from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analytics
-from services.sheet_sync import SheetSyncError, configured, prefetch_rosters, sync_alliance_sheet
+from services.power_growth import PowerContext, prepare_power, take_checkpoint
+from services.sheet_sync import (
+    SheetSyncError,
+    configured,
+    open_spreadsheet,
+    prefetch_rosters,
+    superseded_members,
+    sync_alliance_sheet,
+)
 
 # Rough per-request cost, for the "this will take ~N min" estimate.
 SECONDS_PER_LOOKUP = 1.1
@@ -39,12 +49,35 @@ def _describe(t: Dict[str, str]) -> str:
     return f"tab `{t['tab']}` ← `[{t['tag']}]` kingdom `{t['kid']}`"
 
 
-async def run_analytics(
-    bot_data: Dict[str, Any], client: MightPulseClient, roster_cache: Optional[Dict[Any, Any]] = None
-) -> str:
-    """Refresh the Analytics tab for every target; returns a status line."""
+async def load_power(bot_data: Dict[str, Any], roster_cache: Dict[Any, Any], record: bool) -> Optional[PowerContext]:
+    """Read the Power History tab (and, when `record`, add today's snapshot
+    from the rosters already fetched) and build the growth context. Growth
+    tracking is best-effort: a failure here is logged and the sync goes on
+    without growth columns rather than failing."""
     try:
-        return await update_analytics(client, list(sheet_targets(bot_data)), roster_cache)
+        sh = await asyncio.to_thread(open_spreadsheet)
+        superseded = superseded_members(roster_cache)
+        return await asyncio.to_thread(prepare_power, sh, bot_data, roster_cache, superseded, record)
+    except Exception as e:
+        print(f"⚠️ Power growth tracking skipped: {e}")
+        return None
+
+
+async def run_analytics(
+    bot_data: Dict[str, Any],
+    client: MightPulseClient,
+    roster_cache: Optional[Dict[Any, Any]] = None,
+    power_ctx: Optional[PowerContext] = None,
+) -> str:
+    """Refresh the Analytics tab for every target; returns a status line.
+    Without a power context (/sheet analytics on its own), fetches the
+    rosters and reads growth history itself -- read-only, no snapshot."""
+    try:
+        if power_ctx is None:
+            roster_cache = roster_cache if roster_cache is not None else {}
+            await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
+            power_ctx = await load_power(bot_data, roster_cache, record=False)
+        return await update_analytics(client, list(sheet_targets(bot_data)), roster_cache, power_ctx)
     except SheetSyncError as e:
         return f"❌ Analytics: {e}"
     except Exception as e:
@@ -71,11 +104,13 @@ async def run_sheet_sync(
     # who switched between two tracked alliances isn't left active on the
     # old tab while its cached roster still lists them.
     await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
+    # Today's power snapshot (real runs only) + growth baselines.
+    power_ctx = await load_power(bot_data, roster_cache, record=not dry_run)
     for t in targets:
         try:
             result = await sync_alliance_sheet(
                 client, t["kid"], t["tag"], t["tab"],
-                dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache,
+                dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache, power_ctx=power_ctx,
             )
             if compact:
                 lines.append(f"✅ `{t['tab']}` — {result.compact_summary()}")
@@ -100,7 +135,7 @@ async def run_sheet_sync(
     # Analytics covers every target, not just the ones synced now; rosters
     # fetched above are reused, the rest cost one call each.
     if not dry_run:
-        analytics = await run_analytics(bot_data, client, roster_cache)
+        analytics = await run_analytics(bot_data, client, roster_cache, power_ctx)
         if compact:
             lines.append(analytics)
         else:
@@ -204,6 +239,46 @@ def register_sheet_commands(
 
         await add_queue.enqueue(do_analytics())
 
+    @group.command(name="checkpoint", description="Start measuring power growth from now (run right after KvK)")
+    async def sheet_checkpoint(interaction: discord.Interaction):
+        permission_error = check_permissions(interaction, bot_data)
+        if permission_error:
+            await interaction.response.send_message(permission_error, ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True)
+        if not mightpulse_client.configured():
+            await send_followup(interaction, "❌ MightPulse isn't configured on this bot (MIGHTPULSE_API_KEY).")
+            return
+        targets = list(sheet_targets(bot_data))
+        if not targets:
+            await send_followup(interaction, "❌ No sheet targets configured. Add one with `/sheet add`.")
+            return
+
+        async def do_checkpoint():
+            try:
+                rosters: Dict[Any, Any] = {}
+                await prefetch_rosters(mightpulse_client, targets, rosters)
+                missing = [t["tag"] for t in targets
+                           if not (rosters.get((str(t["kid"]), t["tag"])) or {}).get("alliance")]
+                previous = (bot_data.get("power_checkpoint") or {}).get("at")
+                count = take_checkpoint(bot_data, rosters, superseded_members(rosters))
+                save_bot_data(bot_data)
+                lines = [f"📍 **Checkpoint taken** — {bot_data['power_checkpoint']['at']}",
+                         f"Recorded power for {count} player(s). `Growth %` now counts from here "
+                         f"(shows on the next `/sheet sync` or daily sync)."]
+                if previous:
+                    lines.append(f"-# Replaces the previous checkpoint from {previous}.")
+                if missing:
+                    lines.append(f"⚠️ Couldn't load: {', '.join(f'`{m}`' for m in missing)} — "
+                                 f"those members fall back to their first snapshot after today.")
+                await send_followup(interaction, "\n".join(lines))
+            except Exception as e:
+                await send_followup(interaction, f"❌ Checkpoint failed: {str(e)}")
+                print(f"Error in sheet checkpoint: {e}")
+
+        await add_queue.enqueue(do_checkpoint())
+
     @group.command(name="add", description="Sync an alliance into a tab of the roster sheet")
     @app_commands.describe(
         kingdom="Kingdom number the alliance is in",
@@ -271,9 +346,12 @@ def register_sheet_commands(
                     + (f"`{last[:16].replace('T', ' ')}`" if last else "not yet"))
         else:
             auto = "Auto-sync is off (SHEET_AUTO_SYNC_HOURS=0)"
+        checkpoint = (bot_data.get("power_checkpoint") or {}).get("at")
+        growth = (f"Growth measured from checkpoint {checkpoint}" if checkpoint
+                  else "No checkpoint yet — growth counts from the first snapshot; run /sheet checkpoint after KvK")
         await interaction.response.send_message(
             "📋 **Sheet sync targets**\n" + "\n".join(f"• {_describe(t)}" for t in targets)
-            + f"\n-# {auto}"
+            + f"\n-# {auto}\n-# {growth}"
         )
 
     tree.add_command(group)

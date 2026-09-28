@@ -125,6 +125,7 @@ docker compose logs -f
 | `/sheet sync [tab] [dry_run]` | Sync alliance roster sheet tab(s) against live MightPulse data — every configured tab if `tab` is omitted (see [Alliance sheet sync](#alliance-sheet-sync)) | `/sheet sync dry_run:True` |
 | `/sheet add <kingdom> <tag> [tab]` | Sync an alliance into a sheet tab (tab defaults to the tag; re-adding a tab updates it) | `/sheet add 1343 2MK` |
 | `/sheet analytics` | Refresh just the `Analytics` tab (one roster request per alliance) | `/sheet analytics` |
+| `/sheet checkpoint` | Record everyone's current power as the growth baseline — run right after KvK (see [Power growth](#power-growth)) | `/sheet checkpoint` |
 | `/sheet remove <tab>` / `/sheet list` | Stop syncing a tab / list alliance → tab targets | `/sheet list` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
@@ -147,6 +148,7 @@ docker compose logs -f
 | `GOOGLE_SHEETS_CREDENTIALS_PATH` | ❌ No | `/app/secrets/google-service-account.json` (compose) | Google service-account JSON key for `/sheet sync`. |
 | `GOOGLE_SHEET_ID` | ❌ No | the alliance roster spreadsheet | Spreadsheet ID (between `/d/` and `/edit` in its URL). All tabs live in this one spreadsheet. |
 | `SHEET_DEFAULT_KINGDOM` / `SHEET_DEFAULT_TAG` / `SHEET_DEFAULT_TAB` | ❌ No | `1343` / `1MK` / `1MK` | The first alliance → tab target. Only seeds the list the first time; after that it's managed with `/sheet add` / `/sheet remove` and stored in `botData.json`. Tag is case-sensitive. |
+| `SHEET_TIMEZONE` | ❌ No | `America/New_York` | Time zone for sheet timestamps and the date power snapshots are filed under (any IANA name, e.g. `America/Chicago`, `UTC`). |
 | `SHEET_AUTO_SYNC_HOURS` | ❌ No | `24` | Run a full `/sheet sync` (every tab + Analytics) automatically every N hours and post a summary to the bot channel. `0` turns it off. |
 
 ### MightPulse rate limits
@@ -184,7 +186,7 @@ Two kinds of columns:
 
 Roster members missing from the tab are appended with Player ID, name, `Original_Name`, the live columns, `Current_Tag`, and `x`/`y` set to their current state, so they start 🟩 with empty `observed_*` columns.
 
-**Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Member #`, `Kingdom`, `Player ID`, `Original_Name`, `Current_Name`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `x`, `y`, `observed_tag`, `observed_x`, `observed_y`, `notes` — bolded, frozen and filterable, with the whole tab in Arial 11 — then adds every member.
+**Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Member #`, `Kingdom`, `Player ID`, `Original_Name`, `Current_Name`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `Growth %`, `vs Alliance`, `7d Growth %`, `x`, `y`, `observed_tag`, `observed_x`, `observed_y`, `notes` — bolded, frozen and filterable, with the whole tab in Arial 11 — then adds every member.
 
 `Member #` is a formula in the header cell, `={"Member #"; ARRAYFORMULA(IF(C2:C="", , ROW(C2:C)-1))}` (`C` = the `Player ID` column on new tabs; use whichever column it is on yours), that numbers every row with a Player ID 1…N from the top; it renumbers after sorting or filtering. To add it to an existing tab, put that in the header cell and leave the cells below it empty. (`=SEQUENCE(100)` below the header also works — the sync finds the end of the list by Player ID, not by the numbers.) The sync never writes into cells it has no value for, so it can't break this or any other formula column. You can add your own columns after these; highlighting stops at `observed_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `observed_x`, `observed_y`, `observed_tag` and `notes`; `Kingdom`, `Current_Tag`, `Rank`, `TC_Level` and `Power` are optional — add any of those headers to an existing tab and the next sync fills them in (without `Current_Tag`, `observed_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
 
@@ -202,6 +204,18 @@ Whole rows move, so hand-kept columns and notes go with them; rows without a Pla
 **Layout.** Every sync also fits all columns to their contents (plus room for each header's filter button), centers `Current_Tag` and `observed_tag`, and left-aligns `Rank` and `TC_Level`, so existing tabs get the same layout as new ones.
 
 **Daily auto-sync.** Once a day (`SHEET_AUTO_SYNC_HOURS`, default 24; `0` = off) the bot runs a full `/sheet sync` of every tab plus Analytics on its own, through the same queue as the commands, and posts a one-line-per-tab summary (🟩 matched · 🟨 moved · 🟪 left · ➕ added) to the bot channel. It's checked hourly and timed from the last run, which is saved, so restarts don't cause extra runs; `/sheet list` shows when it last ran. It costs the same MightPulse requests as a manual full sync, about 1.1s per member.
+
+### Power growth
+
+To spot people spending instead of saving for KvK, every real sync records each tracked member's power (from the rosters it already fetched, so no extra API calls) in a hidden `Power History` tab — one row per player per day, kept for 90 days. MightPulse only exposes current power, so growth can only be measured from the day tracking starts.
+
+- **Baseline:** run `/sheet checkpoint` right after KvK; it records everyone's power, and growth is measured from there. Until the first checkpoint (and for anyone who joins later), a player's baseline is their first snapshot. `/sheet list` shows the current checkpoint.
+- **Columns** (members only, refreshed every sync; add the headers to existing tabs, new tabs get them after `Power`):
+  - `Growth %` — power growth since the baseline
+  - `vs Alliance` — that growth as a multiple of the alliance's median growth (1.0× = typical; the median counts as at least 1%, so a flat alliance doesn't make every small gain an outlier)
+  - `7d Growth %` — growth over the last 7 days (blank until a week of history exists)
+- **Flag:** the `vs Alliance` cell turns red when it's at least **2×** the median **and** the player gained at least **5M** power — comparing against the alliance rather than a fixed % keeps small accounts (which grow faster in % terms) from being flagged unfairly. Flagged names are listed in the `/sheet sync` summary (🔴 in the daily line).
+- **Analytics:** a `Median Growth %` column per alliance, plus a "Fastest growers" top-10 table and chart across all alliances (flagged players highlighted).
 
 **Analytics tab.** After every real `/sheet sync` (not dry runs), and on `/sheet analytics`, the bot rewrites an `Analytics` tab comparing **all** configured alliances — even ones not synced in that run:
 

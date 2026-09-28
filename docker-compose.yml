@@ -16,6 +16,7 @@ services:
       - SHEET_DEFAULT_TAG=${SHEET_DEFAULT_TAG:-1MK}
       - SHEET_DEFAULT_TAB=${SHEET_DEFAULT_TAB:-1MK}
       - SHEET_AUTO_SYNC_HOURS=${SHEET_AUTO_SYNC_HOURS:-24}
+      - SHEET_TIMEZONE=${SHEET_TIMEZONE:-America/New_York}
     volumes:
       - kingshot-data:/app/data
       - ./secrets:/app/secrets:ro

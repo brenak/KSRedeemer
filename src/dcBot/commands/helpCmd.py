@@ -114,6 +114,8 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "• Also refreshes the `Analytics` tab (TG5 pie, power & TC charts); "
                     "`/sheet analytics` refreshes just that\n"
                     "• Runs automatically once a day (posts a summary here)\n"
+                    "• Tracks power growth: `/sheet checkpoint` right after KvK sets the baseline; "
+                    "🔴 marks people growing much faster than their alliance\n"
                     "• 🟩 position matches · 🟨 position changed (see `observed_x/y`) · "
                     "🟪 left the alliance (see `observed_tag`)\n"
                     "• Updates names and `Kingdom`, adds missing members; never changes `x`/`y`/`Current_Tag` "
