@@ -71,6 +71,14 @@ NOT_IN_ALLIANCE_COLOR = "8e7cc3"
 NOT_FOUND_NOTE = "not found"
 # Power shown as 235,248,429 -- applied to the Power column on every write.
 POWER_NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
+# Horizontal alignment per column (resolved by header name), applied every
+# write. Rank/TC left so "TG4.4" and plain levels like 30 line up.
+COLUMN_ALIGNMENT = {
+    "current_tag": "CENTER",
+    "observed_tag": "CENTER",
+    "alliance_rank": "LEFT",
+    "tc_level": "LEFT",
+}
 # Font applied to a new/blank tab (Sheets' own default is Arial 10).
 TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
@@ -562,6 +570,29 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
         formats.append({"range": f"{plan.power_col}2:{plan.power_col}", "format": POWER_NUMBER_FORMAT})
     if formats:
         ws.batch_format(formats)
+
+    # Column alignment + auto-fit, every run so existing tabs match too.
+    ws.client.batch_update(ws.spreadsheet_id, {"requests": _layout_requests(ws.id, header)})
+
+
+def _layout_requests(sheet_id: int, header: List[str]) -> List[Dict[str, Any]]:
+    """Whole-column horizontal alignment for the tag / rank / TC columns,
+    then fit every column to its contents (last, so it sees the final
+    values)."""
+    col = resolve_columns(header)
+    requests: List[Dict[str, Any]] = []
+    for key, align in COLUMN_ALIGNMENT.items():
+        if key in col:
+            c = col[key]
+            requests.append({"repeatCell": {
+                # No row bounds = the whole column, header and future rows included.
+                "range": {"sheetId": sheet_id, "startColumnIndex": c, "endColumnIndex": c + 1},
+                "cell": {"userEnteredFormat": {"horizontalAlignment": align}},
+                "fields": "userEnteredFormat.horizontalAlignment",
+            }})
+    requests.append({"autoResizeDimensions": {"dimensions": {
+        "sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": len(header)}}})
+    return requests
 
 
 async def sync_alliance_sheet(
