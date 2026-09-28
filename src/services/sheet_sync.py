@@ -69,12 +69,14 @@ MISMATCH_COLOR = "fbbc04"
 # Google Sheets' own standard palette swatch "light purple 1".
 NOT_IN_ALLIANCE_COLOR = "8e7cc3"
 NOT_FOUND_NOTE = "not found"
+# Font applied to a new/blank tab (Sheets' own default is Arial 10).
+TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
 # Written into a blank/new tab. Highlight covers A..observed_y (K here);
 # notes sits just past it and keeps its own formatting. "Member #" is
 # written as a self-filling formula (MEMBER_NUMBER_FORMULA), not text.
 MEMBER_NUMBER_HEADER = "Member #"
-DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Player ID", "Current_Name", "Original_Name", "Kingdom",
+DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Kingdom", "Player ID", "Original_Name", "Current_Name",
                   "Current_Tag", "Rank", "TC_Level", "Power", "x", "y",
                   "observed_tag", "observed_x", "observed_y", "notes"]
 
@@ -459,10 +461,19 @@ def _header_row_to_write(header: List[str]) -> List[str]:
 
 
 def _init_header(ws, header: List[str]) -> None:
+    # Whole tab (every row/column, so appended rows match): Arial 11 instead
+    # of Sheets' Arial 10 default. Field mask touches only font family/size.
+    ws.client.batch_update(ws.spreadsheet_id, {"requests": [{"repeatCell": {
+        "range": {"sheetId": ws.id},
+        "cell": {"userEnteredFormat": {"textFormat": dict(TAB_FONT)}},
+        "fields": "userEnteredFormat.textFormat(fontFamily,fontSize)",
+    }}]})
     # USER_ENTERED so the Member # formula is evaluated, not stored as text.
     ws.update(values=[_header_row_to_write(header)], range_name="A1", raw=False)
     ws.freeze(rows=1)
-    ws.format(f"A1:{_col_letter(len(header) - 1)}1", {"textFormat": {"bold": True}})
+    # ws.format replaces the whole textFormat, so the font must ride along
+    # with bold or the header would fall back to the default font.
+    ws.format(f"A1:{_col_letter(len(header) - 1)}1", {"textFormat": {"bold": True, **TAB_FONT}})
     norm = [h.strip().lower() for h in header]
     if "power" in norm:
         p = _col_letter(norm.index("power"))
