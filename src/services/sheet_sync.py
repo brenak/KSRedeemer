@@ -68,10 +68,17 @@ MISMATCH_COLOR = "fbbc04"
 NOT_IN_ALLIANCE_COLOR = "8e7cc3"
 NOT_FOUND_NOTE = "not found"
 
-# Written into a blank/new tab. Highlight covers A..observed_y (J here);
-# notes sits just past it and keeps its own formatting.
-DEFAULT_HEADER = ["Player ID", "Current_Name", "Original_Name", "Kingdom", "Current_Tag", "x", "y",
-                  "observed_tag", "observed_x", "observed_y", "notes"]
+# Written into a blank/new tab. Highlight covers A..observed_y (K here);
+# notes sits just past it and keeps its own formatting. "Member #" is
+# written as a self-filling formula (MEMBER_NUMBER_FORMULA), not text.
+MEMBER_NUMBER_HEADER = "Member #"
+DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Player ID", "Current_Name", "Original_Name", "Kingdom",
+                  "Current_Tag", "x", "y", "observed_tag", "observed_x", "observed_y", "notes"]
+# Header cell that displays "Member #" and numbers every row with a Player
+# ID 1..N top-down (renumbers after sorting/filtering). The column below it
+# must stay empty for the array to fill -- which is why appended rows skip
+# unset cells (None) instead of writing "".
+MEMBER_NUMBER_FORMULA = '={{"{header}"; ARRAYFORMULA(IF({pid}2:{pid}="", , ROW({pid}2:{pid})-1))}}'
 
 
 class SheetSyncError(Exception):
@@ -132,7 +139,7 @@ class SyncPlan:
     result: SyncResult
     value_updates: List[Dict[str, Any]]   # gspread batch_update payload
     row_colors: List[Tuple[int, str]]     # (1-indexed row, hex color)
-    new_rows: List[List[str]]
+    new_rows: List[List[Optional[str]]]   # None = leave cell untouched
     new_row_colors: List[Optional[str]]   # parallel to new_rows (None = no color)
     highlight_end: str                    # last highlighted column letter
 
@@ -287,14 +294,16 @@ def plan_sync(
             put("observed_y", row_num, cur_y)
             row_colors.append((row_num, MISMATCH_COLOR))
 
-    new_rows: List[List[str]] = []
+    new_rows: List[List[Optional[str]]] = []
     new_row_colors: List[Optional[str]] = []
     for fid, member in roster.items():
         if fid in seen:
             continue
         player = players.get(fid) or {}
         nick = member.get("nick_name") or player.get("nick_name") or ""
-        new_row = [""] * len(header)
+        # None = skip the cell (JSON null), so appending never blanks out a
+        # formula column like Member # or anything a human added.
+        new_row: List[Optional[str]] = [None] * len(header)
         new_row[col["player id"]] = str(fid)
         # Original_Name is only ever written here, at first sight.
         new_row[col["_label"]] = nick
@@ -366,8 +375,21 @@ def _is_blank(values: List[List[Any]]) -> bool:
     return not any(str(c).strip() for r in values for c in r)
 
 
+def _header_row_to_write(header: List[str]) -> List[str]:
+    """DEFAULT_HEADER as written: Member # becomes its numbering formula."""
+    norm = [h.strip().lower() for h in header]
+    row = list(header)
+    if MEMBER_NUMBER_HEADER.lower() in norm and "player id" in norm:
+        pid = _col_letter(norm.index("player id"))
+        row[norm.index(MEMBER_NUMBER_HEADER.lower())] = MEMBER_NUMBER_FORMULA.format(
+            header=MEMBER_NUMBER_HEADER, pid=pid
+        )
+    return row
+
+
 def _init_header(ws, header: List[str]) -> None:
-    ws.update(values=[header], range_name="A1")
+    # USER_ENTERED so the Member # formula is evaluated, not stored as text.
+    ws.update(values=[_header_row_to_write(header)], range_name="A1", raw=False)
     ws.freeze(rows=1)
     ws.format(f"A1:{_col_letter(len(header) - 1)}1", {"textFormat": {"bold": True}})
     # Whole-sheet basic filter (no range = every row, incl. ones appended
