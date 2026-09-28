@@ -85,6 +85,12 @@ COLUMN_ALIGNMENT = {
     "alliance_rank": "LEFT",
     "tc_level": "LEFT",
 }
+# Alliances cap at 100 members (rows 2-101); ex-members -- people who left
+# the alliance, or IDs MightPulse doesn't know -- are parked from here down.
+DEPARTED_SECTION_ROW = 102
+# Extra width per column on top of Google's auto-fit, for the header's
+# filter dropdown button (auto-fit doesn't account for it).
+FILTER_BUTTON_PX = 28
 # Font applied to a new/blank tab (Sheets' own default is Arial 10).
 TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
@@ -185,6 +191,7 @@ class SyncPlan:
     highlight_end: str                    # last highlighted column letter
     power_col: Optional[str] = None       # Power column letter, if the tab has one
     inactive_rows: List[int] = field(default_factory=list)   # existing rows (1-indexed) with no position
+    departed_rows: List[int] = field(default_factory=list)   # existing rows not on the roster (left / not found)
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -302,15 +309,20 @@ def plan_sync(
     abbr: str,
     roster: Dict[int, Dict[str, Any]],
     players: Dict[int, Optional[Dict[str, Any]]],
+    moved_to: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> SyncPlan:
     """Pure decision logic. `roster` maps FID -> roster member for the
     target alliance; `players` maps FID -> MightPulse `player` object (None
-    = unknown to MightPulse)."""
+    = unknown to MightPulse). `moved_to` maps FID -> {"abbr", "member"} for
+    players a *fresher* roster of another tracked alliance also lists (see
+    superseded_members): they count as having left this one."""
+    moved_to = moved_to or {}
     col = resolve_columns(header)
     result = SyncResult()
     value_updates: List[Dict[str, Any]] = []
     row_colors: List[Tuple[int, str]] = []
     inactive_rows: List[int] = []
+    departed_rows: List[int] = []
     seen: set = set()
 
     def put(col_key: Any, row_num: int, value: Any) -> None:
@@ -333,29 +345,33 @@ def plan_sync(
             continue
         seen.add(pid)
 
-        member = roster.get(pid)
+        moved = moved_to.get(pid)
+        member = None if moved else roster.get(pid)
         player = players.get(pid)
-        if member is None and player is None:
+        if member is None and player is None and not moved:
             result.skipped_not_found += 1
             put("notes", row_num, NOT_FOUND_NOTE)
+            departed_rows.append(row_num)
             continue
 
         # Roster nick is fresher than a possibly day-old player lookup.
-        nick = (member or {}).get("nick_name") or (player or {}).get("nick_name")
+        roster_entry = member or (moved or {}).get("member") or {}
+        nick = roster_entry.get("nick_name") or (player or {}).get("nick_name")
         sheet_label = row[col["_label"]].strip() if col["_label"] < len(row) else ""
         if nick and nick != sheet_label:
             result.labels_updated += 1
             put("_label", row_num, nick)
 
         # Kingdom is live, like the name: a transfer shows where they went.
-        kid = _live_kingdom(member, player)
+        kid = _live_kingdom(roster_entry or None, player)
         if kid and "kingdom" in col and cell(row, "kingdom") != kid:
             if cell(row, "kingdom"):
                 result.kingdoms_changed += 1
             put("kingdom", row_num, kid)
 
         # Rank / TC / power: live, only written when they actually changed.
-        for key, value in _live_stats(member, player).items():
+        # A player a fresher roster claims gets them from that roster.
+        for key, value in _live_stats(roster_entry or None, player).items():
             if key in col and not _same_cell(cell(row, key), value):
                 put(key, row_num, value)
 
@@ -363,6 +379,8 @@ def plan_sync(
         # the live one surfaces in observed_tag only when they differ.
         if member is not None:
             live_tag = abbr
+        elif moved:
+            live_tag = moved["abbr"]
         else:
             live_tag = ((player or {}).get("alliance") or {}).get("abbr") or ""
             if not live_tag:
@@ -375,6 +393,7 @@ def plan_sync(
         if member is None:
             result.not_in_alliance += 1
             row_colors.append((row_num, NOT_IN_ALLIANCE_COLOR))
+            departed_rows.append(row_num)
             continue
 
         cur_x, cur_y = (player or {}).get("x"), (player or {}).get("y")
@@ -400,7 +419,7 @@ def plan_sync(
     new_rows: List[List[Optional[str]]] = []
     new_row_colors: List[Optional[str]] = []
     for fid, member in roster.items():
-        if fid in seen:
+        if fid in seen or fid in moved_to:   # already on the tab / really in another alliance now
             continue
         player = players.get(fid) or {}
         nick = member.get("nick_name") or player.get("nick_name") or ""
@@ -435,12 +454,64 @@ def plan_sync(
     highlight_end = _col_letter(max(col["observed_x"], col["observed_y"]))
     power_col = _col_letter(col["power"]) if "power" in col else None
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
-                    inactive_rows)
+                    inactive_rows, departed_rows)
 
 
 def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
     """Cache key for an alliance roster within one run."""
     return (str(kid), abbr)
+
+
+async def prefetch_rosters(
+    client: MightPulseClient,
+    targets: List[Dict[str, str]],
+    cache: Dict[Tuple[str, str], Optional[Dict[str, Any]]],
+) -> None:
+    """Fetch every tracked alliance's roster into `cache` (one request each,
+    skipping ones already there) so superseded_members can see all of them,
+    even when only one tab is being synced. Failures are left for the tab
+    that needs that roster to report."""
+    for t in targets:
+        key = roster_key(t["kid"], t["tag"])
+        if key in cache:
+            continue
+        try:
+            cache[key] = await client.get_alliance_roster(t["kid"], t["tag"])
+        except MightPulseRateLimited:
+            return
+        except MightPulseError:
+            continue
+
+
+def superseded_members(
+    rosters: Dict[Tuple[str, str], Optional[Dict[str, Any]]]
+) -> Dict[Tuple[str, str], Dict[int, Dict[str, Any]]]:
+    """Players listed on more than one tracked roster at once -- MightPulse
+    caches each alliance's roster separately (up to ~an hour), so right
+    after someone switches alliance the old roster can still list them.
+    The most recently refreshed roster (`cached_at`) wins; for every other
+    roster listing them this returns {roster key: {fid: {"abbr", "member"}}}
+    naming where they really are. Equal timestamps are left alone."""
+    claims: Dict[int, List[Tuple[float, Tuple[str, str], str, Dict[str, Any]]]] = {}
+    for key, data in rosters.items():
+        if not data or not data.get("alliance"):
+            continue
+        abbr = data["alliance"].get("abbr") or key[1]
+        ts = float(data.get("cached_at") or 0)
+        for m in data.get("members") or []:
+            fid = m.get("fid") or m.get("governor_id")
+            if fid:
+                claims.setdefault(int(fid), []).append((ts, key, abbr, m))
+
+    result: Dict[Tuple[str, str], Dict[int, Dict[str, Any]]] = {}
+    for fid, listed in claims.items():
+        if len(listed) < 2:
+            continue
+        newest = max(listed, key=lambda c: c[0])
+        for ts, key, _abbr, _m in listed:
+            if ts < newest[0]:
+                result.setdefault(key, {})[fid] = {"abbr": newest[2], "member": newest[3]}
+    return result
 
 
 def configured() -> bool:
@@ -566,13 +637,17 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
 
     colors = list(plan.row_colors)
     inactive = list(plan.inactive_rows)
-    existing_rows = len(expected_ids)
+    departed = set(plan.departed_rows)
+    # The member list ends at the last member's row -- not the last row with
+    # any value (a column like =SEQUENCE(100) under Member # fills rows with
+    # no member in them), and not an ex-member parked below the list.
+    last_member_row = _last_member_row(current, pid_idx, exclude=departed)
     if plan.new_rows:
-        response = ws.append_rows(plan.new_rows, value_input_option="USER_ENTERED")
-        start = _appended_start_row(response) or existing_rows + 2
+        norm = [h.strip().lower() for h in header]
+        member_col = norm.index(MEMBER_NUMBER_HEADER.lower()) if MEMBER_NUMBER_HEADER.lower() in norm else None
+        start = _place_new_rows(ws, plan.new_rows, current, last_member_row, member_col)
         colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
         inactive += [start + i for i, c in enumerate(plan.new_row_colors) if c == INACTIVE_COLOR]
-    last_data_row = existing_rows + 1 + len(plan.new_rows)
 
     formats = [
         {"range": f"A{row_num}:{plan.highlight_end}{row_num}",
@@ -586,30 +661,121 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     if formats:
         ws.batch_format(formats)
 
-    # Inactive rows to the bottom, then column alignment + auto-fit -- one
-    # request, every run so existing tabs match too.
-    requests = _move_inactive_to_bottom(ws.id, inactive, last_data_row) + _layout_requests(ws.id, header)
-    ws.client.batch_update(ws.spreadsheet_id, {"requests": requests})
+    # Row order (members, then ex-members from row 102), then column
+    # alignment + auto-fit -- one request, every run so existing tabs match.
+    pid_rows = [i for i, row in enumerate(current[1:], start=2) if pid_idx < len(row) and row[pid_idx].strip()]
+    member_rows = [r for r in pid_rows if r not in departed]
+    member_rows += [start + i for i in range(len(plan.new_rows))] if plan.new_rows else []
+    active = [r for r in member_rows if r not in set(inactive)]
+    moves, rows_needed = _arrange_rows(ws.id, active, inactive, sorted(departed))
+    if rows_needed > ws.row_count:
+        ws.add_rows(rows_needed - ws.row_count)
+    ws.client.batch_update(ws.spreadsheet_id, {"requests": moves + _layout_requests(ws.id, header)})
+    _pad_for_filter_buttons(ws, len(header))
 
 
-def _move_inactive_to_bottom(sheet_id: int, inactive_rows: List[int], last_data_row: int) -> List[Dict[str, Any]]:
-    """moveDimension requests that put every inactive row (1-indexed) below
-    the active ones, keeping their relative order. Whole rows move --
-    values, hand-kept columns and colors together. Empty when they're
-    already the bottom block, so a settled tab costs nothing."""
-    rows = sorted(set(inactive_rows))
-    if not rows or rows == list(range(last_data_row - len(rows) + 1, last_data_row + 1)):
-        return []
-    end = last_data_row  # 0-based exclusive end of the data = 1-based last row
+def _last_member_row(values: List[List[str]], pid_idx: int, exclude: Optional[set] = None) -> int:
+    """1-based row of the last row with a Player ID, ignoring `exclude`d
+    rows (ex-members); 1 = header only."""
+    last = 1
+    for i, row in enumerate(values[1:], start=2):
+        if pid_idx < len(row) and row[pid_idx].strip() and i not in (exclude or ()):
+            last = i
+    return last
+
+
+def _place_new_rows(ws, new_rows: List[List[Optional[str]]], current: List[List[str]],
+                    last_member_row: int, member_number_col: Optional[int]) -> int:
+    """Write new members directly under the last member and return the
+    first row used. Cells we have no value for are sent as null (skipped),
+    so a formula column like Member # is untouched. The rows used must be
+    empty apart from the Member # column (formula output such as
+    =SEQUENCE(100)); if anything else is there -- someone's note, say --
+    fall back to append_rows (after the last non-empty row) rather than
+    write a member into that row."""
+    start = last_member_row + 1
+    for k in range(len(new_rows)):
+        r = start + k
+        existing = current[r - 1] if r - 1 < len(current) else []
+        if any(cell.strip() for c, cell in enumerate(existing) if c != member_number_col):
+            response = ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+            return _appended_start_row(response) or len(current) + 1
+
+    needed = start + len(new_rows) - 1
+    if needed > ws.row_count:
+        ws.add_rows(needed - ws.row_count)
+    ws.update(values=new_rows, range_name=f"A{start}", raw=False)
+    return start
+
+
+def _pad_for_filter_buttons(ws, ncols: int) -> None:
+    """Google's auto-fit ignores the filter dropdown in each header cell,
+    so the end of the header (e.g. the "x" of observed_x) hides behind it.
+    Read back the fitted widths and widen each column by the button."""
+    meta = ws.client.fetch_sheet_metadata(
+        ws.spreadsheet_id, params={"fields": "sheets(properties(sheetId),data(columnMetadata(pixelSize)))"}
+    )
+    sheet = next((s for s in meta.get("sheets", []) if s.get("properties", {}).get("sheetId") == ws.id), None)
+    columns = ((sheet or {}).get("data") or [{}])[0].get("columnMetadata", [])[:ncols]
+    requests = [
+        {"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
+            "properties": {"pixelSize": col["pixelSize"] + FILTER_BUTTON_PX},
+            "fields": "pixelSize"}}
+        for c, col in enumerate(columns) if col.get("pixelSize")
+    ]
+    if requests:
+        ws.client.batch_update(ws.spreadsheet_id, {"requests": requests})
+
+
+def _arrange_rows(
+    sheet_id: int, active_rows: List[int], inactive_rows: List[int], departed_rows: List[int]
+) -> Tuple[List[Dict[str, Any]], int]:
+    """moveDimension requests laying the tab out as:
+
+      row 2 on          active members (current order), then inactive ones,
+                        no gaps -- with 20 members an inactive one is row 21
+      row 102 on        ex-members (left the alliance, or not found), below
+                        the 100 member slots -- or right after the members
+                        if there are ever more than 100
+
+    Rows are 1-indexed. Whole rows move (values, hand-kept columns and colors
+    together). Rows without a Player ID end up in the space between the two
+    blocks -- including number-only rows from something like =SEQUENCE(100).
+    Returns (requests, rows the grid needs); no requests when the tab is
+    already in order, so a settled tab costs nothing."""
+    members = sorted(set(active_rows)) + sorted(set(inactive_rows))
+    departed = sorted(set(departed_rows) - set(members))
+    departed_start = max(DEPARTED_SECTION_ROW, len(members) + 2) - 1   # 0-based
+    in_order = (members == list(range(2, 2 + len(members)))
+                and departed == list(range(departed_start + 1, departed_start + 1 + len(departed))))
+    if in_order or not (members or departed):
+        return [], 0
+
+    def move(start: int, end: int, destination: int) -> Dict[str, Any]:
+        # Sheets' destinationIndex is in pre-removal coordinates.
+        return {"moveDimension": {
+            "source": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": start, "endIndex": end},
+            "destinationIndex": destination,
+        }}
+
+    # 1) Pull members, then ex-members, into one tight block from row 2.
+    #    Every move is upward (everything above is already placed), so no
+    #    move disturbs a row placed earlier.
+    order = list(range(1, max(members + departed) + 1))   # 0-based position -> original 1-based row
     requests = []
-    for moved, row in enumerate(rows):
-        # Each earlier move pulled the rows below it up by one.
-        start = row - 1 - moved
-        requests.append({"moveDimension": {
-            "source": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": start, "endIndex": start + 1},
-            "destinationIndex": end,
-        }})
-    return requests
+    for target, row in enumerate(members + departed, start=1):
+        current = order.index(row)
+        if current != target:
+            requests.append(move(current, current + 1, target))
+            order.insert(target, order.pop(current))
+
+    # 2) Slide the ex-members as one block down to row 102 (below the 100
+    #    member slots), leaving the rows without a Player ID in between.
+    block = 1 + len(members)
+    if departed and departed_start > block:
+        requests.append(move(block, block + len(departed), departed_start + len(departed)))
+    return requests, departed_start + len(departed) if departed else len(order)
 
 
 def _layout_requests(sheet_id: int, header: List[str]) -> List[Dict[str, Any]]:
@@ -688,7 +854,11 @@ async def sync_alliance_sheet(
     except MightPulseError as exc:
         raise SheetSyncError(f"MightPulse error — nothing was written: {exc}") from exc
 
-    plan = plan_sync(header, data_rows, roster_abbr, roster, players)
+    # Members a fresher roster of another tracked alliance also lists have
+    # really moved there (needs the other rosters in roster_cache -- the
+    # /sheet commands prefetch every tracked alliance for exactly this).
+    moved_to = superseded_members(roster_cache).get(key, {}) if roster_cache else {}
+    plan = plan_sync(header, data_rows, roster_abbr, roster, players, moved_to)
     plan.result.dry_run = dry_run
     if fresh:
         plan.result.tab_setup = "created" if ws is None else "initialized"

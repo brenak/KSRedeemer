@@ -28,6 +28,7 @@ from services.sheet_sync import (
     _hex_to_rgb_float,
     open_spreadsheet,
     roster_key,
+    superseded_members,
 )
 
 ANALYTICS_TAB = "Analytics"
@@ -43,14 +44,15 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
      "Check it, then update x / y by hand."),
     (NOT_IN_ALLIANCE_COLOR, "Left the alliance",
      "No longer on this alliance's roster. observed_tag shows where they went: a tag, \"none\" (no "
-     "alliance), or \"left\" (MightPulse hasn't caught up yet).",
+     "alliance), or \"left\" (MightPulse hasn't caught up yet). Moved below the 100 member slots "
+     "(row 102 on).",
      "Follow up, or remove the row."),
     (INACTIVE_COLOR, "Inactive",
      "On the roster, but MightPulse has no map position for them — they haven't been playing. "
-     "These rows are kept at the bottom of the tab.",
+     "These rows are kept at the end of the member list.",
      "Follow up if needed."),
-    (None, "No color", "notes says \"not found\": MightPulse doesn't know this Player ID. Rows without a "
-     "Player ID are skipped.", "Check the Player ID."),
+    (None, "No color", "notes says \"not found\": MightPulse doesn't know this Player ID. Moved below the "
+     "member slots with the ex-members. Rows without a Player ID are skipped.", "Check the Player ID."),
 ]
 LEGEND_COLUMNS: List[Tuple[str, str]] = [
     ("Member #", "Automatic count 1…N from the top (renumbers after sorting)."),
@@ -116,8 +118,11 @@ def _bucket(level: Any) -> Optional[str]:
     return None
 
 
-def compute_stats(label: str, kid: str, roster: Dict[str, Any]) -> AllianceStats:
-    members = roster.get("members") or []
+def compute_stats(label: str, kid: str, roster: Dict[str, Any], exclude: Optional[set] = None) -> AllianceStats:
+    """`exclude`: FIDs a fresher roster of another tracked alliance claims."""
+    exclude = exclude or set()
+    members = [m for m in roster.get("members") or []
+               if int(m.get("fid") or m.get("governor_id") or 0) not in exclude]
     buckets = {b[0]: 0 for b in TC_BUCKETS}
     powers: List[int] = []
     for m in members:
@@ -311,7 +316,9 @@ async def update_analytics(
     stats: List[AllianceStats] = []
     notes: List[str] = []
     below_min = 0
-    for target, label in zip(targets, alliance_labels(targets)):
+    labels = alliance_labels(targets)
+    failed: Dict[Tuple[str, str], str] = {}
+    for target in targets:
         key = roster_key(target["kid"], target["tag"])
         try:
             if key not in cache:
@@ -319,13 +326,21 @@ async def update_analytics(
         except MightPulseRateLimited as exc:
             raise SheetSyncError("MightPulse rate limit hit — Analytics not updated.") from exc
         except MightPulseError as exc:
-            notes.append(f"{label}: skipped ({exc})")
+            failed[key] = str(exc)
+
+    # Someone listed on two tracked rosters (one of them stale) counts only
+    # for the alliance whose roster is fresher.
+    superseded = superseded_members(cache)
+    for target, label in zip(targets, labels):
+        key = roster_key(target["kid"], target["tag"])
+        if key in failed:
+            notes.append(f"{label}: skipped ({failed[key]})")
             continue
-        roster = cache[key]
+        roster = cache.get(key)
         if not roster or not roster.get("alliance"):
             notes.append(f"{label}: skipped (alliance not found on MightPulse)")
             continue
-        s = compute_stats(label, target["kid"], roster)
+        s = compute_stats(label, target["kid"], roster, exclude=set(superseded.get(key, {})))
         if s.total_power < MIN_TOTAL_POWER:
             below_min += 1
             notes.append(f"{label}: not shown (total power {s.total_power:,} is under "

@@ -15,7 +15,7 @@ from dcBot.interaction_reply import send_followup
 from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
 from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analytics
-from services.sheet_sync import SheetSyncError, configured, sync_alliance_sheet
+from services.sheet_sync import SheetSyncError, configured, prefetch_rosters, sync_alliance_sheet
 
 # Rough per-request cost, for the "this will take ~N min" estimate.
 SECONDS_PER_LOOKUP = 1.1
@@ -67,6 +67,10 @@ async def run_sheet_sync(
     player_cache: Dict[int, Any] = {}  # shared so no one is looked up twice
     roster_cache: Dict[Any, Any] = {}  # reused by the Analytics tab below
     lines: List[str] = []
+    # Every tracked roster up front -- even for a one-tab sync -- so someone
+    # who switched between two tracked alliances isn't left active on the
+    # old tab while its cached roster still lists them.
+    await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
     for t in targets:
         try:
             result = await sync_alliance_sheet(
