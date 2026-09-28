@@ -17,7 +17,7 @@ For every sheet row with a Player ID (the in-game FID):
   color change (informational, not a flagged discrepancy).
 - Known -> kept fresh regardless of the branches below (no color): the
   name/label column gets their current nick, and, when the tab has them,
-  `Kingdom` (so a server transfer shows where they went), `Alliance_Rank`
+  `Kingdom` (so a server transfer shows where they went), `Rank`
   (R1-R4/Leader; their rank in their new alliance if they left),
   `TC_Level` (TG-style, see tc_label) and `Power`.
 - Tag: `Current_Tag` is a recorded value like x/y (seeded when the row is
@@ -75,7 +75,7 @@ NOT_FOUND_NOTE = "not found"
 # written as a self-filling formula (MEMBER_NUMBER_FORMULA), not text.
 MEMBER_NUMBER_HEADER = "Member #"
 DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Player ID", "Current_Name", "Original_Name", "Kingdom",
-                  "Current_Tag", "Alliance_Rank", "TC_Level", "Power", "x", "y",
+                  "Current_Tag", "Rank", "TC_Level", "Power", "x", "y",
                   "observed_tag", "observed_x", "observed_y", "notes"]
 
 # Optional live stat columns -- refreshed every sync when the tab has them.
