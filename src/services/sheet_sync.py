@@ -86,6 +86,16 @@ COLUMN_ALIGNMENT = {
     "alliance_rank": "LEFT",
     "tc_level": "LEFT",
 }
+# Member rows are ordered by alliance rank (then kept in their existing
+# order within a rank). Anything MightPulse doesn't label sorts last.
+RANK_ORDER = {"leader": 0, "r5": 0, "r4": 1, "r3": 2, "r2": 3, "r1": 4}
+UNKNOWN_RANK = len(set(RANK_ORDER.values()))
+
+
+def rank_sort_key(label: Any) -> int:
+    return RANK_ORDER.get(str(label or "").strip().lower(), UNKNOWN_RANK)
+
+
 # Alliances cap at 100 members (rows 2-101); ex-members -- people who left
 # the alliance, or IDs MightPulse doesn't know -- are parked from here down.
 DEPARTED_SECTION_ROW = 102
@@ -147,6 +157,7 @@ class SyncResult:
     skipped_not_found: int = 0
     new_members_added: int = 0
     new_member_nicks: List[str] = field(default_factory=list)
+    columns_added: List[str] = field(default_factory=list)   # optional columns inserted into an existing tab
     flagged_nicks: List[str] = field(default_factory=list)   # growing much faster than the alliance
     # "created" (tab didn't exist) / "initialized" (tab was blank) / ""
     tab_setup: str = ""
@@ -160,6 +171,8 @@ class SyncResult:
             parts.append(f"🌍{self.kingdoms_changed} transferred")
         if self.flagged_nicks:
             parts.append(f"🔴{len(self.flagged_nicks)} growing fast")
+        if self.columns_added:
+            parts.append(f"🧱 +{len(self.columns_added)} column(s)")
         if self.skipped_not_found:
             parts.append(f"⚠️{self.skipped_not_found} not found")
         if self.tab_setup:
@@ -180,6 +193,9 @@ class SyncResult:
             f"🟪 No longer in alliance: {self.not_in_alliance}",
             f"➕ New members {'to add' if self.dry_run else 'added'}: {self.new_members_added}",
         ]
+        if self.columns_added:
+            added = ", ".join(f"`{c}`" for c in self.columns_added)
+            lines.append(f"🧱 {'Would add' if self.dry_run else 'Added'} column(s): {added}")
         if self.labels_updated:
             lines.append(f"🏷️ Names updated: {self.labels_updated}")
         if self.kingdoms_changed:
@@ -213,6 +229,8 @@ class SyncPlan:
     departed_rows: List[int] = field(default_factory=list)   # existing rows not on the roster (left / not found)
     column_formats: List[Tuple[str, Dict[str, Any]]] = field(default_factory=list)  # (column letter, number format)
     flag_cells: List[Tuple[int, str]] = field(default_factory=list)                 # (row, column letter) -> FLAG_COLOR
+    row_ranks: Dict[int, int] = field(default_factory=dict)       # existing member row -> rank_sort_key
+    new_row_ranks: List[int] = field(default_factory=list)        # parallel to new_rows
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -266,6 +284,54 @@ def resolve_columns(header: List[str]) -> Dict[str, int]:
     }
     # Canonical keys win over any header literally named the same thing.
     return {**norm, **stat_cols, "_label": label_col}
+
+
+# Columns the sync fills itself; an existing tab missing any of them gets
+# them inserted (see missing_auto_columns). Member # and the required
+# columns are never added automatically.
+AUTO_COLUMNS = ("Kingdom", "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %")
+
+
+def _column_present(norm: set, name: str) -> bool:
+    """Whether a header set already has `name`, under any accepted alias."""
+    key = name.strip().lower()
+    for aliases in {**STAT_COLUMN_ALIASES, **GROWTH_COLUMN_ALIASES}.values():
+        if key in aliases:
+            return any(a in norm for a in aliases)
+    return key in norm
+
+
+def missing_auto_columns(header: List[str]) -> List[str]:
+    norm = {h.strip().lower() for h in header}
+    return [c for c in AUTO_COLUMNS if not _column_present(norm, c)]
+
+
+def _add_columns(ws, header: List[str], missing: List[str]) -> None:
+    """Insert each missing column where it sits on a new tab -- right after
+    the nearest DEFAULT_HEADER column that comes before it (else at the
+    end) -- and write its header. Whole columns are inserted, so columns to
+    the right (and formulas pointing at them) shift over intact."""
+    working = list(header)
+    requests: List[Dict[str, Any]] = []
+    headers_to_write: List[Tuple[int, str]] = []
+    for name in missing:
+        pos = DEFAULT_HEADER.index(name)
+        norm = [h.strip().lower() for h in working]
+        index = len(working)
+        for prev in reversed(DEFAULT_HEADER[:pos]):
+            hits = [i for i, h in enumerate(norm) if _column_present({h}, prev)]
+            if hits:
+                index = hits[0] + 1
+                break
+        requests.append({"insertDimension": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": index, "endIndex": index + 1},
+            "inheritFromBefore": index > 0,
+        }})
+        working.insert(index, name)
+        headers_to_write = [(i + (1 if i >= index else 0), n) for i, n in headers_to_write] + [(index, name)]
+    ws.client.batch_update(ws.spreadsheet_id, {"requests": requests})
+    ws.batch_update([{"range": f"{_col_letter(i)}1", "values": [[n]]} for i, n in headers_to_write],
+                    value_input_option="RAW")
 
 
 def _live_kingdom(member: Optional[Dict[str, Any]], player: Optional[Dict[str, Any]]) -> str:
@@ -354,6 +420,8 @@ def plan_sync(
     value_updates: List[Dict[str, Any]] = []
     row_colors: List[Tuple[int, str]] = []
     flag_cells: List[Tuple[int, str]] = []
+    row_ranks: Dict[int, int] = {}
+    new_row_ranks: List[int] = []
     inactive_rows: List[int] = []
     departed_rows: List[int] = []
     seen: set = set()
@@ -404,6 +472,8 @@ def plan_sync(
 
         # Rank / TC / power: live, only written when they actually changed.
         # A player a fresher roster claims gets them from that roster.
+        if member is not None:
+            row_ranks[row_num] = rank_sort_key(member.get("alliance_rank_label"))
         for key, value in _live_stats(roster_entry or None, player).items():
             if key in col and not _same_cell(cell(row, key), value):
                 put(key, row_num, value)
@@ -497,6 +567,7 @@ def plan_sync(
             new_row_colors.append(INACTIVE_COLOR)
             result.position_unknown += 1
         new_rows.append(new_row)
+        new_row_ranks.append(rank_sort_key(member.get("alliance_rank_label")))
         result.new_members_added += 1
         result.new_member_nicks.append(nick or f"fid={fid}")
 
@@ -504,7 +575,7 @@ def plan_sync(
     power_col = _col_letter(col["power"]) if "power" in col else None
     column_formats = [(_col_letter(col[k]), f) for k, f in GROWTH_NUMBER_FORMATS.items() if k in col]
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
-                    inactive_rows, departed_rows, column_formats, flag_cells)
+                    inactive_rows, departed_rows, column_formats, flag_cells, row_ranks, new_row_ranks)
 
 
 def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
@@ -721,7 +792,16 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     pid_rows = [i for i, row in enumerate(current[1:], start=2) if pid_idx < len(row) and row[pid_idx].strip()]
     member_rows = [r for r in pid_rows if r not in departed]
     member_rows += [start + i for i in range(len(plan.new_rows))] if plan.new_rows else []
-    active = [r for r in member_rows if r not in set(inactive)]
+    ranks = dict(plan.row_ranks)
+    if plan.new_rows:
+        ranks.update({start + i: rk for i, rk in enumerate(plan.new_row_ranks)})
+
+    def by_rank(rows: List[int]) -> List[int]:
+        # Leader, R4, R3, R2, R1; ties keep their current order (row number).
+        return sorted(set(rows), key=lambda r: (ranks.get(r, UNKNOWN_RANK), r))
+
+    active = by_rank([r for r in member_rows if r not in set(inactive)])
+    inactive = by_rank(inactive)
     moves, rows_needed = _arrange_rows(ws.id, active, inactive, sorted(departed))
     if rows_needed > ws.row_count:
         ws.add_rows(rows_needed - ws.row_count)
@@ -799,7 +879,8 @@ def _arrange_rows(
     blocks -- including number-only rows from something like =SEQUENCE(100).
     Returns (requests, rows the grid needs); no requests when the tab is
     already in order, so a settled tab costs nothing."""
-    members = sorted(set(active_rows)) + sorted(set(inactive_rows))
+    # Callers pass rows already in the order they want (by rank); keep it.
+    members = list(dict.fromkeys(list(active_rows) + list(inactive_rows)))
     departed = sorted(set(departed_rows) - set(members))
     departed_start = max(DEPARTED_SECTION_ROW, len(members) + 2) - 1   # 0-based
     in_order = (members == list(range(2, 2 + len(members)))
@@ -910,6 +991,16 @@ async def sync_alliance_sheet(
     except MightPulseError as exc:
         raise SheetSyncError(f"MightPulse error — nothing was written: {exc}") from exc
 
+    # Existing tab missing some of the bot-filled columns: insert them (real
+    # runs only, and only now that MightPulse has answered), then re-read so
+    # every planned cell address matches the new layout.
+    columns_added = [] if fresh else missing_auto_columns(header)
+    if columns_added and not dry_run:
+        await asyncio.to_thread(_add_columns, ws, header, columns_added)
+        all_values = await asyncio.to_thread(ws.get_all_values)
+        header, data_rows = all_values[0], all_values[1:]
+        col = resolve_columns(header)
+
     # Members a fresher roster of another tracked alliance also lists have
     # really moved there (needs the other rosters in roster_cache -- the
     # /sheet commands prefetch every tracked alliance for exactly this).
@@ -920,6 +1011,7 @@ async def sync_alliance_sheet(
         growth, _median = alliance_growth([m for f, m in roster.items() if f not in moved_to], power_ctx)
     plan = plan_sync(header, data_rows, roster_abbr, roster, players, moved_to, growth)
     plan.result.dry_run = dry_run
+    plan.result.columns_added = columns_added
     if fresh:
         plan.result.tab_setup = "created" if ws is None else "initialized"
     if not dry_run:

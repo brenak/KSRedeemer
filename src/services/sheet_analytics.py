@@ -85,6 +85,7 @@ LEGEND_COLUMNS: List[Tuple[str, str]] = [
 ]
 LEGEND_FOOTER = [
     "Tabs sync automatically once a day; run /sheet sync in Discord to update now.",
+    "Members are listed by rank (Leader, R4, R3, R2, R1), inactive members after them, and ex-members from row 102.",
     f"The {ANALYTICS_TAB} tab compares alliances with at least 5 billion total power.",
     f"Power is recorded daily in the hidden '{HISTORY_TAB}' tab (last {HISTORY_DAYS} days) to measure growth.",
 ]
@@ -188,8 +189,14 @@ def _grid(sheet_id: int, col: int, rows: int) -> Dict[str, Any]:
             "startColumnIndex": col, "endColumnIndex": col + 1}
 
 
-def _anchor(sheet_id: int, row: int, col: int, width: int = 560, height: int = 340) -> Dict[str, Any]:
-    return {"overlayPosition": {"anchorCell": {"sheetId": sheet_id, "rowIndex": row, "columnIndex": col},
+CHART_W, CHART_H, WIDE_W, WIDE_H, CHART_GAP = 560, 340, 1140, 380, 20
+
+
+def _anchor(sheet_id: int, row: int, x: int, y: int, width: int = CHART_W, height: int = CHART_H) -> Dict[str, Any]:
+    """Every chart hangs off the same cell (column A of `row`) and is placed
+    by pixel offset, so charts can't overlap however wide the columns are."""
+    return {"overlayPosition": {"anchorCell": {"sheetId": sheet_id, "rowIndex": row, "columnIndex": 0},
+                                "offsetXPixels": x, "offsetYPixels": y,
                                 "widthPixels": width, "heightPixels": height}}
 
 
@@ -232,9 +239,12 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
         },
     }
     requests = [
-        {"addChart": {"chart": {"spec": tg5_pie, "position": _anchor(sheet_id, first_chart_row, 0)}}},
-        {"addChart": {"chart": {"spec": power_bar, "position": _anchor(sheet_id, first_chart_row, 7)}}},
-        {"addChart": {"chart": {"spec": tc_stacked, "position": _anchor(sheet_id, first_chart_row + 18, 0, 900, 380)}}},
+        # Row 1: pie | power bar. Row 2: TC stacked (full width). Row 3: growers.
+        {"addChart": {"chart": {"spec": tg5_pie, "position": _anchor(sheet_id, first_chart_row, 0, 0)}}},
+        {"addChart": {"chart": {"spec": power_bar,
+                                "position": _anchor(sheet_id, first_chart_row, CHART_W + CHART_GAP, 0)}}},
+        {"addChart": {"chart": {"spec": tc_stacked,
+                                "position": _anchor(sheet_id, first_chart_row, 0, CHART_H + CHART_GAP, WIDE_W, WIDE_H)}}},
     ]
     if growers:
         def g_grid(offset: int) -> Dict[str, Any]:
@@ -251,8 +261,50 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
             },
         }
         requests.append({"addChart": {"chart": {"spec": growers_bar,
-                                                "position": _anchor(sheet_id, first_chart_row + 40, 0, 900, 380)}}})
+                                                "position": _anchor(sheet_id, first_chart_row, 0,
+                                                                    CHART_H + WIDE_H + 2 * CHART_GAP,
+                                                                    WIDE_W, WIDE_H)}}})
     return requests
+
+
+# --- column widths ----------------------------------------------------------
+
+# Arial at 11pt (~14.7px) character widths, from Arial's advance widths
+# (em fractions). Anything not listed uses an average.
+_ARIAL_EM = {
+    **{d: 0.556 for d in "0123456789"},
+    " ": 0.278, ",": 0.278, ".": 0.278, ":": 0.278, ";": 0.278, "'": 0.191, "|": 0.26,
+    "i": 0.222, "j": 0.222, "l": 0.222, "f": 0.278, "t": 0.278, "r": 0.333, "I": 0.278,
+    "m": 0.833, "w": 0.722, "M": 0.833, "W": 0.944, "%": 0.889, "(": 0.333, ")": 0.333,
+    "-": 0.333, "—": 1.0, "×": 0.584,
+}
+_FONT_PX = 11 * 96 / 72
+CELL_PADDING_PX = 18
+
+
+def _text_px(text: str, bold: bool = False) -> float:
+    em = 0.0
+    for ch in str(text):
+        if ch in _ARIAL_EM:
+            em += _ARIAL_EM[ch]
+        elif ch.isupper():
+            em += 0.667
+        elif ch.islower():
+            em += 0.5
+        else:
+            em += 0.6
+    return em * _FONT_PX * (1.1 if bold else 1.0)
+
+
+def _display(column: str, value: Any) -> str:
+    """How Sheets will show a table value, for sizing its column."""
+    if value in ("", None):
+        return ""
+    if column in POWER_COLUMNS or column == "Power gained":
+        return f"{int(value):,}"
+    if column in ("Median Growth %", "Growth %"):
+        return f"{float(value) * 100:.1f}%"
+    return str(value)
 
 
 # --- sheet writes -----------------------------------------------------------
@@ -386,8 +438,27 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     requests += [{"deleteEmbeddedObject": {"objectId": cid}} for cid in _existing_chart_ids(sh, ws.id)]
     if rows:
         requests += chart_requests(ws.id, rows, first_chart_row=rows + 4 + len(footer), growers=len(growers))
-    requests.append({"autoResizeDimensions": {"dimensions": {
-        "sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": width}}})
+    # Explicit widths from the text Sheets will display (bold headers, power
+    # with separators, percentages). Google's auto-fit under-measures bold
+    # text and formatted numbers, cutting off "Median Growth %" and big
+    # power totals.
+    columns: Dict[int, List[Tuple[str, bool]]] = {}
+    for i, h in enumerate(HEADER):
+        columns.setdefault(i, []).append((h, True))
+    for st in stats:
+        for i, v in enumerate(st.row()):
+            columns[i].append((_display(HEADER[i], v), False))
+    if growers:
+        for j, h in enumerate(GROWERS_HEADER):
+            columns.setdefault(GROWERS_COL + j, []).append((h, True))
+        for g in growers:
+            for j, v in enumerate(g.row()):
+                columns[GROWERS_COL + j].append((_display(GROWERS_HEADER[j], v), False))
+    for c, texts in columns.items():
+        px = max(_text_px(t, bold) for t, bold in texts) + CELL_PADDING_PX
+        requests.append({"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
+            "properties": {"pixelSize": int(px)}, "fields": "pixelSize"}})
     sh.batch_update({"requests": requests})
     # Footer only after the auto-fit above: fitting sizes a column to its
     # longest text, so the "Updated ..." line would otherwise stretch column
