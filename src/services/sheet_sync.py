@@ -32,7 +32,9 @@ For every sheet row with a Player ID (the in-game FID):
   overwritten here) with the lookup's current x/y:
   - match -> clear observed_x/observed_y, paint MATCH_COLOR
   - differ -> write current x/y into observed_x/observed_y, MISMATCH_COLOR
-  - no position available -> left untouched, counted as position_unknown
+  - no position available (MightPulse has no map location -- in practice
+    an inactive player) -> INACTIVE_COLOR, and the row is moved below the
+    active ones; counted as position_unknown
 
 Roster members with no row at all are appended at the bottom with Player
 ID, name, Original_Name, Kingdom, Current_Tag, and x/y seeded from their
@@ -68,6 +70,10 @@ MATCH_COLOR = "4ea72e"
 MISMATCH_COLOR = "fbbc04"
 # Google Sheets' own standard palette swatch "light purple 1".
 NOT_IN_ALLIANCE_COLOR = "8e7cc3"
+# On the roster but MightPulse has no map position for them -- in practice
+# an inactive player. Google's "dark gray 1" swatch; these rows are also
+# moved to the bottom of the tab (see _move_inactive_to_bottom).
+INACTIVE_COLOR = "b7b7b7"
 NOT_FOUND_NOTE = "not found"
 # Power shown as 235,248,429 -- applied to the Power column on every write.
 POWER_NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
@@ -129,7 +135,7 @@ class SyncResult:
     def compact_summary(self) -> str:
         """One line for the daily auto-sync post."""
         parts = [f"🟩{self.matched}", f"🟨{self.mismatched}", f"🟪{self.not_in_alliance}",
-                 f"➕{self.new_members_added}"]
+                 f"⬜{self.position_unknown}", f"➕{self.new_members_added}"]
         if self.kingdoms_changed:
             parts.append(f"🌍{self.kingdoms_changed} transferred")
         if self.skipped_not_found:
@@ -157,7 +163,7 @@ class SyncResult:
         if self.kingdoms_changed:
             lines.append(f"🌍 Kingdom changed (transferred): {self.kingdoms_changed}")
         if self.position_unknown:
-            lines.append(f"❔ Position unavailable: {self.position_unknown}")
+            lines.append(f"⬜ Inactive (no map position — moved to the bottom): {self.position_unknown}")
         if self.skipped_not_found:
             lines.append(f"⚠️ Not found on MightPulse: {self.skipped_not_found}")
         if self.skipped_no_player_id:
@@ -178,6 +184,7 @@ class SyncPlan:
     new_row_colors: List[Optional[str]]   # parallel to new_rows (None = no color)
     highlight_end: str                    # last highlighted column letter
     power_col: Optional[str] = None       # Power column letter, if the tab has one
+    inactive_rows: List[int] = field(default_factory=list)   # existing rows (1-indexed) with no position
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -303,6 +310,7 @@ def plan_sync(
     result = SyncResult()
     value_updates: List[Dict[str, Any]] = []
     row_colors: List[Tuple[int, str]] = []
+    inactive_rows: List[int] = []
     seen: set = set()
 
     def put(col_key: Any, row_num: int, value: Any) -> None:
@@ -372,6 +380,8 @@ def plan_sync(
         cur_x, cur_y = (player or {}).get("x"), (player or {}).get("y")
         if cur_x is None or cur_y is None:
             result.position_unknown += 1
+            row_colors.append((row_num, INACTIVE_COLOR))
+            inactive_rows.append(row_num)
             continue
 
         sheet_x = _parse_int_cell(row, col["x"])
@@ -416,14 +426,16 @@ def plan_sync(
             new_row[col["y"]] = str(player["y"])
             new_row_colors.append(MATCH_COLOR)
         else:
-            new_row_colors.append(None)
+            new_row_colors.append(INACTIVE_COLOR)
+            result.position_unknown += 1
         new_rows.append(new_row)
         result.new_members_added += 1
         result.new_member_nicks.append(nick or f"fid={fid}")
 
     highlight_end = _col_letter(max(col["observed_x"], col["observed_y"]))
     power_col = _col_letter(col["power"]) if "power" in col else None
-    return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col)
+    return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
+                    inactive_rows)
 
 
 def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
@@ -553,11 +565,14 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
         ws.batch_update(plan.value_updates, value_input_option="USER_ENTERED")
 
     colors = list(plan.row_colors)
+    inactive = list(plan.inactive_rows)
+    existing_rows = len(expected_ids)
     if plan.new_rows:
         response = ws.append_rows(plan.new_rows, value_input_option="USER_ENTERED")
-        start = _appended_start_row(response)
-        if start is not None:
-            colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
+        start = _appended_start_row(response) or existing_rows + 2
+        colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
+        inactive += [start + i for i, c in enumerate(plan.new_row_colors) if c == INACTIVE_COLOR]
+    last_data_row = existing_rows + 1 + len(plan.new_rows)
 
     formats = [
         {"range": f"A{row_num}:{plan.highlight_end}{row_num}",
@@ -571,8 +586,30 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     if formats:
         ws.batch_format(formats)
 
-    # Column alignment + auto-fit, every run so existing tabs match too.
-    ws.client.batch_update(ws.spreadsheet_id, {"requests": _layout_requests(ws.id, header)})
+    # Inactive rows to the bottom, then column alignment + auto-fit -- one
+    # request, every run so existing tabs match too.
+    requests = _move_inactive_to_bottom(ws.id, inactive, last_data_row) + _layout_requests(ws.id, header)
+    ws.client.batch_update(ws.spreadsheet_id, {"requests": requests})
+
+
+def _move_inactive_to_bottom(sheet_id: int, inactive_rows: List[int], last_data_row: int) -> List[Dict[str, Any]]:
+    """moveDimension requests that put every inactive row (1-indexed) below
+    the active ones, keeping their relative order. Whole rows move --
+    values, hand-kept columns and colors together. Empty when they're
+    already the bottom block, so a settled tab costs nothing."""
+    rows = sorted(set(inactive_rows))
+    if not rows or rows == list(range(last_data_row - len(rows) + 1, last_data_row + 1)):
+        return []
+    end = last_data_row  # 0-based exclusive end of the data = 1-based last row
+    requests = []
+    for moved, row in enumerate(rows):
+        # Each earlier move pulled the rows below it up by one.
+        start = row - 1 - moved
+        requests.append({"moveDimension": {
+            "source": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": start, "endIndex": start + 1},
+            "destinationIndex": end,
+        }})
+    return requests
 
 
 def _layout_requests(sheet_id: int, header: List[str]) -> List[Dict[str, Any]]:
