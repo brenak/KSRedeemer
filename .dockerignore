@@ -15,6 +15,7 @@ src/*/*/__pycache__/
 # Environment and secrets
 .env
 .env.*
+secrets/
 !.env.example
 
 # Git

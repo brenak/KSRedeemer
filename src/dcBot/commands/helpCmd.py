@@ -106,6 +106,23 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
             )
 
             embed.add_field(
+                name="📋 /sheet sync [tab] [dry_run]",
+                value=(
+                    "Sync alliance roster sheet tabs against live MightPulse data (all tabs if `tab` omitted).\n"
+                    "• `/sheet add <kingdom> <tag> [tab]`, `/sheet remove <tab>`, `/sheet list` "
+                    "manage which alliance goes in which tab\n"
+                    "• 🟩 position matches · 🟨 position changed (see `observed_x/y`) · "
+                    "🟪 left the alliance (see `observed_tag`)\n"
+                    "• Updates names and `Kingdom`, adds missing members; never changes `x`/`y`/`Current_Tag` "
+                    "— differences go in `observed_*`\n"
+                    "• One lookup per member — takes a couple of minutes\n"
+                    "• `dry_run: True` previews counts without writing\n"
+                    "• Requires bot admin permissions"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
                 name="➖ /remove <query>",
                 value=(
                     "Remove a player by ID or nickname.\n"

@@ -122,6 +122,9 @@ docker compose logs -f
 | `/syncalliance [kingdom] [tag]` | Register every member of an alliance (tag is case-sensitive) and track it. New members get all active codes. With no arguments, re-syncs all tracked alliances | `/syncalliance 1343 2mk` |
 | `/untrackalliance <kingdom> <tag>` | Stop syncing an alliance; its members stay registered | `/untrackalliance 1343 2mk` |
 | `/alliances` | List tracked alliances | `/alliances` |
+| `/sheet sync [tab] [dry_run]` | Sync alliance roster sheet tab(s) against live MightPulse data — every configured tab if `tab` is omitted (see [Alliance sheet sync](#alliance-sheet-sync)) | `/sheet sync dry_run:True` |
+| `/sheet add <kingdom> <tag> [tab]` | Sync an alliance into a sheet tab (tab defaults to the tag; re-adding a tab updates it) | `/sheet add 1343 2MK` |
+| `/sheet remove <tab>` / `/sheet list` | Stop syncing a tab / list alliance → tab targets | `/sheet list` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
 | `/find <query>` | Search for a player by ID or nickname | `/find 123456789` |
@@ -140,6 +143,10 @@ docker compose logs -f
 | `CONTAINER_NAME` / `DATA_VOLUME` | ❌ No | `sdw-redeemer-bot` / `kingshot-data` | docker-compose only. Set both to something unique when running a second copy of the bot on the same host, so it gets its own container and its own player data. |
 | `MIGHTPULSE_API_KEY` | ❌ No | - | [MightPulse](https://api.mightpulse.com/) API key (get one via Discord login on their site). Powers player name/kingdom/alliance lookups and alliance sync. Silently disabled if unset. |
 
+| `GOOGLE_SHEETS_CREDENTIALS_PATH` | ❌ No | `/app/secrets/google-service-account.json` (compose) | Google service-account JSON key for `/sheet sync`. |
+| `GOOGLE_SHEET_ID` | ❌ No | the alliance roster spreadsheet | Spreadsheet ID (between `/d/` and `/edit` in its URL). All tabs live in this one spreadsheet. |
+| `SHEET_DEFAULT_KINGDOM` / `SHEET_DEFAULT_TAG` / `SHEET_DEFAULT_TAB` | ❌ No | `1343` / `1MK` / `1MK` | The first alliance → tab target. Only seeds the list the first time; after that it's managed with `/sheet add` / `/sheet remove` and stored in `botData.json`. Tag is case-sensitive. |
+
 ### MightPulse rate limits
 
 The API key allows 60 requests/minute and 5,000/day, so the bot is deliberately frugal:
@@ -148,6 +155,41 @@ The API key allows 60 requests/minute and 5,000/day, so the bot is deliberately 
 - When a new code appears, tracked alliance rosters are pulled first (one request per alliance covers every member), then only players outside those rosters are looked up individually. This happens before redeeming, so kingdom transfers are applied first.
 - The daily alliance sync costs one request per tracked alliance.
 - All requests share a throttle (~1 per 1.1s). A 429 is retried once; if it persists, the batch stops and the rest catch up next time.
+
+## Alliance Sheet Sync
+
+`/sheet sync` compares hand-maintained alliance roster tabs in a Google Sheet against live MightPulse data and writes the result back (ported from kingshot_web's SOS sheet card). Each tab tracks one alliance; which alliance goes in which tab is managed with `/sheet add <kingdom> <tag> [tab]` / `/sheet remove` / `/sheet list` (the first one is seeded from `SHEET_DEFAULT_*`, `1343` / `1MK` / tab `1MK`). `/sheet sync` with no `tab` syncs every tab in turn, looking each player up only once even if they appear on several tabs — so someone who moved from one tracked alliance to another shows 🟪 on the old tab and is appended to the new one.
+
+For each row with a `Player ID`:
+
+| Situation | Written | Row color (A → `observed_y`) |
+|---|---|---|
+| Unknown to MightPulse | `notes` = "not found" | unchanged |
+| No longer on the alliance roster | (tag handling below) | 🟪 `#8e7cc3` |
+| On the roster, position matches `x`/`y` | `observed_x`/`observed_y` cleared | 🟩 `#4ea72e` |
+| On the roster, position differs | current position → `observed_x`/`observed_y` | 🟨 `#fbbc04` |
+
+Two kinds of columns:
+
+- **Live** — overwritten with the current value on every sync: the name column (`Current_Name`, else `Label/Name`/`Label`/`Name`) and `Kingdom` (so a server transfer shows where they went; the summary counts transfers).
+- **Recorded** — set when the row is added, then only changed by hand: `x`, `y` and `Current_Tag`. When the live value differs, it goes into `observed_x`/`observed_y`/`observed_tag`; when it matches again, those are cleared. The live tag is this alliance's tag while they're on its roster; otherwise their new tag, `none` (no alliance), or `left` (MightPulse hasn't caught up on where they went). Update the recorded value by hand once you've reviewed a change.
+
+Roster members missing from the tab are appended with Player ID, name, `Original_Name`, `Kingdom`, `Current_Tag`, and `x`/`y` set to their current state, so they start 🟩 with empty `observed_*` columns.
+
+**Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Player ID`, `Current_Name`, `Original_Name`, `Kingdom`, `Current_Tag`, `x`, `y`, `observed_tag`, `observed_x`, `observed_y`, `notes` — then adds every member. You can add your own columns after these; highlighting stops at `observed_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `observed_x`, `observed_y`, `observed_tag` and `notes`; `Kingdom` and `Current_Tag` are optional (without `Current_Tag`, `observed_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
+
+**Cost/timing:** per tab, one roster request plus one player lookup per row and per new member, so ~2 minutes for ~100 rows at the MightPulse throttle. It runs in the command queue. Membership comes from the live roster; positions come from player lookups, which MightPulse may have cached for up to about a day. Nothing is written if any MightPulse request fails, or if rows were added/removed/re-sorted in the sheet while the sync ran.
+
+**Setup:**
+
+1. A Google Cloud service account with the **Google Sheets API** enabled, and a JSON key for it (the one kingshot_web used works as-is).
+2. Share the spreadsheet with the key's `client_email` as **Editor**.
+3. On the server, put the key at `secrets/google-service-account.json` next to `docker-compose.yml` (mounted read-only into the container), then `docker compose up -d`:
+   ```bash
+   mkdir -p secrets && chmod 700 secrets
+   cp /path/to/key.json secrets/google-service-account.json && chmod 600 secrets/google-service-account.json
+   ```
+4. Run `/sheet sync dry_run:True` first — it does every read and comparison and surfaces a missing column, missing tab or sharing problem without writing.
 
 ## Data Persistence & Backup
 

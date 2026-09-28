@@ -17,6 +17,7 @@ from dcBot.commands.setKingdomCmd import register_set_kingdom_command
 from dcBot.commands.setNameCmd import register_set_name_command
 from dcBot.commands.refreshNameCmd import register_refresh_name_command
 from dcBot.commands.allianceCmd import register_alliance_commands
+from dcBot.commands.sheetCmd import register_sheet_commands
 from dcBot.data_handler import load_bot_data, save_bot_data
 from dcBot.update_checker import UpdateChecker
 from dcBot.gift_code_cache import GiftCodeCacheManager
@@ -58,6 +59,7 @@ def init_bot(token: str) -> tuple[discord.Client, MightPulseClient]:
     register_set_name_command(tree, bot_data, save_bot_data_with_players)
     register_refresh_name_command(tree, bot_data, save_bot_data_with_players, add_queue, mightpulse_client)
     register_alliance_commands(tree, bot_data, save_bot_data_with_players, add_queue, mightpulse_client)
+    register_sheet_commands(tree, bot_data, save_bot_data_with_players, add_queue, mightpulse_client)
     register_find_command(tree, bot_data)
     register_help_command(tree, bot_data)
     register_codes_command(tree, bot_data)

@@ -8,8 +8,16 @@ services:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - DISCORD_GUILD_ID=${DISCORD_GUILD_ID:-1530565101453840434}
       - MIGHTPULSE_API_KEY=${MIGHTPULSE_API_KEY}
+      - GIFT_CODE_CHECK_INTERVAL_HOURS=${GIFT_CODE_CHECK_INTERVAL_HOURS:-1}
+      # /sheet: Google service-account key, mounted from ./secrets below
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=${GOOGLE_SHEETS_CREDENTIALS_PATH:-/app/secrets/google-service-account.json}
+      - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID:-1EQaEx2ISCMAQmHsd71S-GcCoLL58ZJxtBykhWFss11A}
+      - SHEET_DEFAULT_KINGDOM=${SHEET_DEFAULT_KINGDOM:-1343}
+      - SHEET_DEFAULT_TAG=${SHEET_DEFAULT_TAG:-1MK}
+      - SHEET_DEFAULT_TAB=${SHEET_DEFAULT_TAB:-1MK}
     volumes:
       - kingshot-data:/app/data
+      - ./secrets:/app/secrets:ro
     networks:
       - bot-network
 
