@@ -406,25 +406,27 @@ def plan_sync(
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col)
 
 
+def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
+    """Cache key for an alliance roster within one run."""
+    return (str(kid), abbr)
+
+
 def configured() -> bool:
     return bool(GOOGLE_SHEETS_CREDENTIALS_PATH and GOOGLE_SHEET_ID)
 
 
-def _read_sheet(tab: str):
-    """(spreadsheet, worksheet or None if the tab doesn't exist, all values).
-    A missing tab is only created at write time (_create_tab), after every
-    MightPulse request has succeeded -- a typo'd tag never leaves an empty
-    tab behind, and a dry run never touches the spreadsheet."""
+def open_spreadsheet():
+    """Authenticated gspread Spreadsheet for GOOGLE_SHEET_ID (blocking)."""
     if not GOOGLE_SHEETS_CREDENTIALS_PATH:
         raise SheetSyncError("GOOGLE_SHEETS_CREDENTIALS_PATH is not set.")
     if not GOOGLE_SHEET_ID:
         raise SheetSyncError("GOOGLE_SHEET_ID is not set.")
 
-    import gspread  # lazy: only /sheet sync needs it
+    import gspread  # lazy: only /sheet needs it
 
     try:
         gc = gspread.service_account(filename=GOOGLE_SHEETS_CREDENTIALS_PATH)
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
+        return gc.open_by_key(GOOGLE_SHEET_ID)
     except FileNotFoundError as exc:
         raise SheetSyncError(
             f"Google credentials file not found at `{GOOGLE_SHEETS_CREDENTIALS_PATH}`."
@@ -435,6 +437,15 @@ def _read_sheet(tab: str):
             "(share it with the key's client_email as Editor)."
         ) from exc
 
+
+def _read_sheet(tab: str):
+    """(spreadsheet, worksheet or None if the tab doesn't exist, all values).
+    A missing tab is only created at write time (_create_tab), after every
+    MightPulse request has succeeded -- a typo'd tag never leaves an empty
+    tab behind, and a dry run never touches the spreadsheet."""
+    import gspread
+
+    sh = open_spreadsheet()
     try:
         ws = sh.worksheet(tab)
     except gspread.exceptions.WorksheetNotFound:
@@ -548,12 +559,15 @@ async def sync_alliance_sheet(
     tab: str,
     dry_run: bool = False,
     player_cache: Optional[Dict[int, Optional[Dict[str, Any]]]] = None,
+    roster_cache: Optional[Dict[Tuple[str, str], Optional[Dict[str, Any]]]] = None,
 ) -> SyncResult:
     """Read one tab, fetch roster + per-player data from MightPulse, write
     the result back. Nothing is written unless every MightPulse request
     succeeded, so a rate-limited run never leaves the tab half-updated.
     Pass the same `player_cache` dict when syncing several tabs in one run
-    so a player appearing on more than one tab is only looked up once."""
+    so a player appearing on more than one tab is only looked up once, and
+    a `roster_cache` to keep the rosters (keyed by roster_key) for reuse --
+    the analytics tab builds on them without re-fetching."""
     if not client.configured():
         raise SheetSyncError("MightPulse isn't configured (MIGHTPULSE_API_KEY).")
 
@@ -567,7 +581,13 @@ async def sync_alliance_sheet(
     col = resolve_columns(header)  # fail fast before spending API quota
 
     try:
-        data = await client.get_alliance_roster(kid, abbr)
+        key = roster_key(kid, abbr)
+        if roster_cache is not None and key in roster_cache:
+            data = roster_cache[key]
+        else:
+            data = await client.get_alliance_roster(kid, abbr)
+            if roster_cache is not None:
+                roster_cache[key] = data
         if not data or not data.get("alliance"):
             raise SheetSyncError(f"No alliance `{abbr}` in kingdom `{kid}` on MightPulse (tag is case-sensitive).")
         roster_abbr = data["alliance"].get("abbr") or abbr

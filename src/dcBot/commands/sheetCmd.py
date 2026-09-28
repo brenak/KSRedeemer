@@ -14,6 +14,7 @@ from config.config import SHEET_DEFAULT_KINGDOM, SHEET_DEFAULT_TAB, SHEET_DEFAUL
 from dcBot.interaction_reply import send_followup
 from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
+from services.sheet_analytics import ANALYTICS_TAB, update_analytics
 from services.sheet_sync import SheetSyncError, configured, sync_alliance_sheet
 
 # Rough per-request cost, for the "this will take ~N min" estimate.
@@ -100,11 +101,12 @@ def register_sheet_commands(
 
         async def do_sync():
             player_cache: Dict[int, Any] = {}  # shared so no one is looked up twice
+            roster_cache: Dict[Any, Any] = {}  # reused by the Analytics tab below
             for t in targets:
                 try:
                     result = await sync_alliance_sheet(
                         mightpulse_client, t["kid"], t["tag"], t["tab"],
-                        dry_run=dry_run, player_cache=player_cache,
+                        dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache,
                     )
                     header = (
                         f"📋 **[dry run — nothing written] {_describe(t)}**"
@@ -120,7 +122,43 @@ def register_sheet_commands(
                     message = message[:1900] + "\n…(truncated)"
                 await send_followup(interaction, message)
 
+            # Analytics covers every target, not just the ones synced now;
+            # rosters fetched above are reused, the rest cost one call each.
+            if not dry_run:
+                await send_followup(interaction, await _run_analytics(roster_cache))
+
         await add_queue.enqueue(do_sync())
+
+    async def _run_analytics(roster_cache: Optional[Dict[Any, Any]] = None) -> str:
+        try:
+            return await update_analytics(mightpulse_client, list(sheet_targets(bot_data)), roster_cache)
+        except SheetSyncError as e:
+            return f"❌ Analytics: {e}"
+        except Exception as e:
+            print(f"Error updating analytics: {e}")
+            return f"❌ Analytics: {str(e)}"
+
+    @group.command(name="analytics", description=f"Refresh the {ANALYTICS_TAB} tab (one roster request per alliance)")
+    async def sheet_analytics(interaction: discord.Interaction):
+        permission_error = check_permissions(interaction, bot_data)
+        if permission_error:
+            await interaction.response.send_message(permission_error, ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True)
+        if not configured():
+            await send_followup(interaction,
+                "❌ Sheet sync isn't configured on this bot (GOOGLE_SHEETS_CREDENTIALS_PATH / GOOGLE_SHEET_ID)."
+            )
+            return
+        if not mightpulse_client.configured():
+            await send_followup(interaction, "❌ MightPulse isn't configured on this bot (MIGHTPULSE_API_KEY).")
+            return
+
+        async def do_analytics():
+            await send_followup(interaction, await _run_analytics())
+
+        await add_queue.enqueue(do_analytics())
 
     @group.command(name="add", description="Sync an alliance into a tab of the roster sheet")
     @app_commands.describe(
@@ -135,6 +173,11 @@ def register_sheet_commands(
             return
 
         tab = (tab or tag).strip()
+        if tab.lower() == ANALYTICS_TAB.lower():
+            await interaction.response.send_message(
+                f"❌ `{ANALYTICS_TAB}` is reserved for the analytics tab — pick another tab name.", ephemeral=True
+            )
+            return
         target = {"kid": kingdom.strip(), "tag": tag.strip(), "tab": tab}
         existing = _find_target(bot_data, tab)
         if existing:

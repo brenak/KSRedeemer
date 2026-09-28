@@ -124,6 +124,7 @@ docker compose logs -f
 | `/alliances` | List tracked alliances | `/alliances` |
 | `/sheet sync [tab] [dry_run]` | Sync alliance roster sheet tab(s) against live MightPulse data — every configured tab if `tab` is omitted (see [Alliance sheet sync](#alliance-sheet-sync)) | `/sheet sync dry_run:True` |
 | `/sheet add <kingdom> <tag> [tab]` | Sync an alliance into a sheet tab (tab defaults to the tag; re-adding a tab updates it) | `/sheet add 1343 2MK` |
+| `/sheet analytics` | Refresh just the `Analytics` tab (one roster request per alliance) | `/sheet analytics` |
 | `/sheet remove <tab>` / `/sheet list` | Stop syncing a tab / list alliance → tab targets | `/sheet list` |
 | `/remove <query>` | Remove a player by ID or nickname | `/remove Jareggie` |
 | `/list` | View all registered players (paginated, 10 per page) | `/list` |
@@ -184,6 +185,13 @@ Roster members missing from the tab are appended with Player ID, name, `Original
 **Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Member #`, `Kingdom`, `Player ID`, `Original_Name`, `Current_Name`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `x`, `y`, `observed_tag`, `observed_x`, `observed_y`, `notes` — bolded, frozen and filterable, with the whole tab in Arial 11 — then adds every member.
 
 `Member #` is a formula in the header cell, `={"Member #"; ARRAYFORMULA(IF(C2:C="", , ROW(C2:C)-1))}` (`C` = the `Player ID` column on new tabs; use whichever column it is on yours), that numbers every row with a Player ID 1…N from the top; it renumbers after sorting or filtering. To add it to an existing tab, put that in the header cell and leave the cells below it empty. Avoid something like `=SEQUENCE(100)` below the header: it fills rows that have no member, so the sync's new rows land after row 100. The sync never writes into cells it has no value for, so it can't break this or any other formula column. You can add your own columns after these; highlighting stops at `observed_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `observed_x`, `observed_y`, `observed_tag` and `notes`; `Kingdom`, `Current_Tag`, `Rank`, `TC_Level` and `Power` are optional — add any of those headers to an existing tab and the next sync fills them in (without `Current_Tag`, `observed_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
+
+**Analytics tab.** After every real `/sheet sync` (not dry runs), and on `/sheet analytics`, the bot rewrites an `Analytics` tab comparing **all** configured alliances — even ones not synced in that run:
+
+- a summary table, one row per alliance: Alliance, Kingdom, Members, TG5, TG4, TG3, TG2, TG1, Below TG1, Total Power, Avg Power, Top Power (TG buckets: TG5 = level 55+, TG4 = 50–54, TG3 = 45–49, TG2 = 40–44, TG1 = 35–39)
+- a **TG5 pie** (share of TG5 players by alliance), a **total power bar chart**, and a **stacked bar of town center levels** per alliance
+
+It's built from each alliance's live roster (current members only), reusing the rosters the sync just fetched, so it usually costs no extra MightPulse requests — at most one per alliance. The charts are deleted and recreated on each update so they always match the table; edits to them (and anything typed into the tab) are overwritten. The alliance label is the tag, with the kingdom added when two tracked alliances share a tag. `Analytics` can't be used as an alliance tab name.
 
 **Cost/timing:** per tab, one roster request plus one player lookup per row and per new member, so ~2 minutes for ~100 rows at the MightPulse throttle. It runs in the command queue. Membership comes from the live roster; positions come from player lookups, which MightPulse may have cached for up to about a day. Nothing is written if any MightPulse request fails, or if rows were added/removed/re-sorted in the sheet while the sync ran.
 
