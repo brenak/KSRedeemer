@@ -360,10 +360,19 @@ def _create_tab(sh, tab: str):
     return sh.add_worksheet(title=tab, rows=200, cols=len(DEFAULT_HEADER))
 
 
+def _is_blank(values: List[List[Any]]) -> bool:
+    """gspread returns [[]] (not []) for a tab with no values at all, and
+    padded rows of "" for one that was cleared -- neither is a header."""
+    return not any(str(c).strip() for r in values for c in r)
+
+
 def _init_header(ws, header: List[str]) -> None:
     ws.update(values=[header], range_name="A1")
     ws.freeze(rows=1)
     ws.format(f"A1:{_col_letter(len(header) - 1)}1", {"textFormat": {"bold": True}})
+    # Whole-sheet basic filter (no range = every row, incl. ones appended
+    # later), so the header gets filter/sort dropdowns like the original tab.
+    ws.set_basic_filter()
 
 
 def _appended_start_row(response: Any) -> Optional[int]:
@@ -387,7 +396,7 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     # re-sorted meanwhile, every planned cell address would be off. Re-read
     # and refuse to write rather than paint the wrong rows.
     current = ws.get_all_values()
-    changed = bool(current) if fresh else (
+    changed = (not _is_blank(current)) if fresh else (
         _player_id_column(current, pid_idx)[: len(expected_ids)] != expected_ids
     )
     if changed:
@@ -437,7 +446,7 @@ async def sync_alliance_sheet(
 
     # gspread is blocking -- keep it off the event loop.
     sh, ws, all_values = await asyncio.to_thread(_read_sheet, tab)
-    fresh = not all_values  # new or blank tab: gets DEFAULT_HEADER + every member
+    fresh = _is_blank(all_values)  # new or blank tab: gets DEFAULT_HEADER + every member
     if fresh:
         header, data_rows = list(DEFAULT_HEADER), []
     else:
