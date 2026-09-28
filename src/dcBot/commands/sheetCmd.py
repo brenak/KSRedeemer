@@ -14,7 +14,7 @@ from config.config import SHEET_AUTO_SYNC_HOURS, SHEET_DEFAULT_KINGDOM, SHEET_DE
 from dcBot.interaction_reply import send_followup
 from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
-from services.sheet_analytics import ANALYTICS_TAB, update_analytics
+from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analytics
 from services.sheet_sync import SheetSyncError, configured, sync_alliance_sheet
 
 # Rough per-request cost, for the "this will take ~N min" estimate.
@@ -213,9 +213,9 @@ def register_sheet_commands(
             return
 
         tab = (tab or tag).strip()
-        if tab.lower() == ANALYTICS_TAB.lower():
+        if tab.lower() in (t.lower() for t in RESERVED_TABS):
             await interaction.response.send_message(
-                f"❌ `{ANALYTICS_TAB}` is reserved for the analytics tab — pick another tab name.", ephemeral=True
+                f"❌ `{tab}` is reserved for the bot's own tab — pick another tab name.", ephemeral=True
             )
             return
         target = {"kid": kingdom.strip(), "tag": tag.strip(), "tab": tab}

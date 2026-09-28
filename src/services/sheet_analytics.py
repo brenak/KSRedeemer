@@ -18,14 +18,54 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.mightpulse_client import MightPulseClient, MightPulseError, MightPulseRateLimited
 from services.sheet_sync import (
+    INACTIVE_COLOR,
+    MATCH_COLOR,
+    MISMATCH_COLOR,
+    NOT_IN_ALLIANCE_COLOR,
     POWER_NUMBER_FORMAT,
     TAB_FONT,
     SheetSyncError,
+    _hex_to_rgb_float,
     open_spreadsheet,
     roster_key,
 )
 
 ANALYTICS_TAB = "Analytics"
+LEGEND_TAB = "Legend"
+RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB)
+
+# Legend rows are built from the same color constants the sync paints with,
+# so the key can't drift from what's on the alliance tabs.
+LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
+    (MATCH_COLOR, "Matched", "On the alliance roster, at the position recorded in x / y.", "Nothing to do."),
+    (MISMATCH_COLOR, "Moved",
+     "On the roster, but at a different position than x / y. The new position is in observed_x / observed_y.",
+     "Check it, then update x / y by hand."),
+    (NOT_IN_ALLIANCE_COLOR, "Left the alliance",
+     "No longer on this alliance's roster. observed_tag shows where they went: a tag, \"none\" (no "
+     "alliance), or \"left\" (MightPulse hasn't caught up yet).",
+     "Follow up, or remove the row."),
+    (INACTIVE_COLOR, "Inactive",
+     "On the roster, but MightPulse has no map position for them — they haven't been playing. "
+     "These rows are kept at the bottom of the tab.",
+     "Follow up if needed."),
+    (None, "No color", "notes says \"not found\": MightPulse doesn't know this Player ID. Rows without a "
+     "Player ID are skipped.", "Check the Player ID."),
+]
+LEGEND_COLUMNS: List[Tuple[str, str]] = [
+    ("Member #", "Automatic count 1…N from the top (renumbers after sorting)."),
+    ("Kingdom, Current_Name, Rank, TC_Level, Power",
+     "Live — refreshed from MightPulse on every sync. TC_Level shows True Gold tiers (55 = TG5, 54 = TG4.4)."),
+    ("Original_Name", "The name when the member was first added. Never changed."),
+    ("Current_Tag, x, y", "Recorded values — set when the member is added, then only changed by hand."),
+    ("observed_tag, observed_x, observed_y",
+     "The live value, filled in only while it differs from Current_Tag / x / y; cleared once they match again."),
+    ("notes", "\"not found\" is written by the sync; otherwise the column is yours."),
+]
+LEGEND_FOOTER = [
+    "Tabs sync automatically once a day; run /sheet sync in Discord to update now.",
+    f"The {ANALYTICS_TAB} tab compares alliances with at least 5 billion total power.",
+]
 # Alliances below this total power are left off the table and charts (and
 # noted under the table), so small alliances don't clutter the comparison.
 MIN_TOTAL_POWER = 5_000_000_000
@@ -156,15 +196,6 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int) -> List[Dict[
 
 # --- sheet writes -----------------------------------------------------------
 
-def _get_or_create_tab(sh):
-    import gspread
-
-    try:
-        return sh.worksheet(ANALYTICS_TAB)
-    except gspread.exceptions.WorksheetNotFound:
-        return sh.add_worksheet(title=ANALYTICS_TAB, rows=60, cols=len(HEADER), index=0)
-
-
 def _existing_chart_ids(sh, sheet_id: int) -> List[int]:
     meta = sh.fetch_sheet_metadata(params={"fields": "sheets(properties(sheetId),charts(chartId))"})
     for sheet in meta.get("sheets", []):
@@ -173,10 +204,57 @@ def _existing_chart_ids(sh, sheet_id: int) -> List[int]:
     return []
 
 
+def _get_or_create(sh, title: str, index: int, rows: int, cols: int):
+    import gspread
+
+    try:
+        return sh.worksheet(title)
+    except gspread.exceptions.WorksheetNotFound:
+        return sh.add_worksheet(title=title, rows=rows, cols=cols, index=index)
+
+
+def write_legend(sh) -> None:
+    """(Re)write the Legend tab, kept second (right after Analytics)."""
+    ws = _get_or_create(sh, LEGEND_TAB, index=1, rows=30, cols=3)
+    color_rows = [[label, meaning, action] for _, label, meaning, action in LEGEND_COLORS]
+    col_start = 1 + len(color_rows) + 2          # 0-based row of the "Column" header
+    values = ([["Color", "Meaning", "What to do"]] + color_rows + [[]]
+              + [["Column", "Meaning"]] + [[c, m] for c, m in LEGEND_COLUMNS] + [[]]
+              + [[f] for f in LEGEND_FOOTER])
+    ws.clear()
+    ws.update(values=values, range_name="A1", raw=True)
+
+    def cells(r0: int, r1: int, c0: int, c1: int) -> Dict[str, Any]:
+        return {"sheetId": ws.id, "startRowIndex": r0, "endRowIndex": r1, "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def fmt(rng: Dict[str, Any], cell_format: Dict[str, Any], fields: str) -> Dict[str, Any]:
+        return {"repeatCell": {"range": rng, "cell": {"userEnteredFormat": cell_format}, "fields": fields}}
+
+    requests: List[Dict[str, Any]] = [
+        # Reset everything (old colors included), then Arial 11 + wrapped, top-aligned text.
+        fmt({"sheetId": ws.id},
+            {"textFormat": dict(TAB_FONT), "wrapStrategy": "WRAP", "verticalAlignment": "TOP"},
+            "userEnteredFormat"),
+        fmt(cells(0, 1, 0, 3), {"textFormat": {"bold": True, **TAB_FONT}}, "userEnteredFormat.textFormat"),
+        fmt(cells(col_start, col_start + 1, 0, 2), {"textFormat": {"bold": True, **TAB_FONT}},
+            "userEnteredFormat.textFormat"),
+    ]
+    for i, (color, *_rest) in enumerate(LEGEND_COLORS):
+        if color:
+            requests.append(fmt(cells(1 + i, 2 + i, 0, 1), {"backgroundColor": _hex_to_rgb_float(color)},
+                                "userEnteredFormat.backgroundColor"))
+    for c, px in enumerate((260, 560, 240)):
+        requests.append({"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
+            "properties": {"pixelSize": px}, "fields": "pixelSize"}})
+    requests.append({"updateSheetProperties": {"properties": {"sheetId": ws.id, "index": 1}, "fields": "index"}})
+    sh.batch_update({"requests": requests})
+
+
 def write_analytics(stats: List[AllianceStats], notes: List[str]) -> None:
     """Rewrite the Analytics tab (blocking): table, formatting, charts."""
     sh = open_spreadsheet()
-    ws = _get_or_create_tab(sh)
+    ws = _get_or_create(sh, ANALYTICS_TAB, index=0, rows=60, cols=len(HEADER))
     rows = len(stats)
     updated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     footer = [[f"Updated {updated} — current alliance members, from MightPulse rosters"]]
@@ -213,6 +291,8 @@ def write_analytics(stats: List[AllianceStats], notes: List[str]) -> None:
     requests.append({"autoResizeDimensions": {"dimensions": {
         "sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": len(HEADER)}}})
     sh.batch_update({"requests": requests})
+    # Legend goes second, after Analytics has claimed index 0.
+    write_legend(sh)
 
 
 async def update_analytics(
