@@ -59,12 +59,16 @@ ERROR_MESSAGES: Dict[int, str] = {
 
 # Player already has this code -- treat as a successful outcome, matching
 # the old modal-text implementation's handling of "already claimed" phrasings.
-ALREADY_REDEEMED_ERR_CODES = {40005, 40008, 40011}
+ALREADY_REDEEMED_ERR_CODES = {40008, 40011}
 
 # Properties of the code itself, not the player -- abort the whole batch
 # rather than repeating the same failure for every remaining player.
 INVALID_CODE_ERR_CODE = 40014
 EXPIRED_CODE_ERR_CODE = 40007
+# "Claim limit exceeded": the code's total claims are used up, so nobody
+# else can redeem it either. Handled exactly like an expired code (marked
+# expired, batch stopped). It used to be counted as "already redeemed".
+CLAIM_LIMIT_ERR_CODE = 40005
 
 
 def _sign(params: Dict[str, str]) -> str:
@@ -175,11 +179,14 @@ async def redeem_giftcode_for_all_players(players: List[Dict[str, str]], gift_co
                 })
                 return results
 
-            elif err_code == EXPIRED_CODE_ERR_CODE:
+            elif err_code in (EXPIRED_CODE_ERR_CODE, CLAIM_LIMIT_ERR_CODE):
+                # Same errorCode for both, so every caller marks the code
+                # expired and drops it from the active list.
                 results.append({
                     "success": False,
                     "errorCode": "EXPIRED",
-                    "message": "Gift code has expired.",
+                    "message": ("Gift code has reached its claim limit." if err_code == CLAIM_LIMIT_ERR_CODE
+                                else "Gift code has expired."),
                 })
                 return results
 
