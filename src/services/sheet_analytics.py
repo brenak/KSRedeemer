@@ -112,6 +112,20 @@ POWER_COLUMNS = ("Total Power", "Avg Power", "Top Power")
 GROWERS_HEADER = ["Fastest growers", "Alliance", "Growth %", "Power gained"]
 GROWERS_COL = len(HEADER) + 1
 TOP_GROWERS = 10
+# Hidden chart-data block right of the growers table: one column per
+# alliance (header = alliance label), holding a grower's Growth % only in
+# their own alliance's column. Feeding the chart one series per alliance
+# is what gives it an alliance color legend; stacked, each player still
+# shows as a single bar.
+GROWERS_SERIES_COL = GROWERS_COL + len(GROWERS_HEADER) + 1
+
+
+def growers_series_block(growers: List["Grower"], alliance_order: List[str]) -> Tuple[List[str], List[List[Any]]]:
+    """(alliances with at least one grower, in main-table order; rows of
+    the hidden block -- header row first)."""
+    present = [a for a in alliance_order if any(g.alliance == a for g in growers)]
+    rows = [present] + [[round(g.growth_pct, 4) if g.alliance == a else "" for a in present] for g in growers]
+    return present, rows
 
 
 @dataclass
@@ -246,9 +260,11 @@ def _anchor(sheet_id: int, spot: Tuple[int, int, int], width: int = CHART_W, hei
 
 def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int = 0,
                    col_widths: Optional[Dict[int, int]] = None,
-                   grower_alliances: Optional[List[int]] = None) -> List[Dict[str, Any]]:
-    """`grower_alliances`: for each growers-table row, the index of that
-    player's alliance in the main table (drives the bar color)."""
+                   grower_series: Optional[List[int]] = None,
+                   growers_title: str = "Fastest growers since the checkpoint") -> List[Dict[str, Any]]:
+    """`grower_series`: main-table index of each alliance column in the
+    hidden growers block (GROWERS_SERIES_COL on), in order -- drives each
+    series' color so it matches the pie."""
     at = chart_layout(first_chart_row, col_widths or {})
     domain = {"sourceRange": {"sources": [_grid(sheet_id, COL["Alliance"], rows)]}}
 
@@ -298,15 +314,19 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
         def g_grid(offset: int) -> Dict[str, Any]:
             return _grid(sheet_id, GROWERS_COL + offset, growers)
         growers_bar = {
-            "title": "Fastest growers since the checkpoint",
+            "title": growers_title,
+            # The per-alliance series columns are hidden; plot them anyway.
+            "hiddenDimensionStrategy": "SHOW_ALL",
             "basicChart": {
                 "chartType": "BAR",
-                "legendPosition": "NO_LEGEND",
+                "stackedType": "STACKED",
+                "legendPosition": "RIGHT_LEGEND",
                 "headerCount": 1,
                 "axis": [{"position": "BOTTOM_AXIS", "title": "Growth %"}],
                 "domains": [{"domain": {"sourceRange": {"sources": [g_grid(0)]}}}],
-                "series": [{"series": {"sourceRange": {"sources": [g_grid(2)]}}, "targetAxis": "BOTTOM_AXIS",
-                            "styleOverrides": _point_colors(grower_alliances or [])}],
+                "series": [{"series": {"sourceRange": {"sources": [_grid(sheet_id, GROWERS_SERIES_COL + j, growers)]}},
+                            "targetAxis": "BOTTOM_AXIS", "colorStyle": alliance_color(idx)}
+                           for j, idx in enumerate(grower_series or [])],
             },
         }
         requests.append({"addChart": {"chart": {"spec": growers_bar,
@@ -412,14 +432,16 @@ def write_legend(sh) -> None:
 
 
 def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optional[List[Grower]] = None,
-                    growth_note: str = "") -> None:
+                    growth_note: str = "", growers_title: str = "Fastest growers since the checkpoint") -> None:
     """Rewrite the Analytics tab (blocking): tables, formatting, charts."""
     growers = growers or []
+    series_alliances, series_rows = growers_series_block(growers, [st.label for st in stats])
     width = GROWERS_COL + len(GROWERS_HEADER)
+    grid_width = GROWERS_SERIES_COL + len(series_alliances) if series_alliances else width
     sh = open_spreadsheet()
-    ws = _get_or_create(sh, ANALYTICS_TAB, index=0, rows=60, cols=width)
-    if ws.col_count < width:
-        ws.add_cols(width - ws.col_count)
+    ws = _get_or_create(sh, ANALYTICS_TAB, index=0, rows=60, cols=grid_width)
+    if ws.col_count < grid_width:
+        ws.add_cols(grid_width - ws.col_count)
     rows = len(stats)
     updated = now_local().strftime("%Y-%m-%d %H:%M %Z")
     footer = [[f"Updated {updated} — current alliance members, from MightPulse rosters"]]
@@ -432,6 +454,7 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     if growers:
         ws.update(values=[GROWERS_HEADER] + [g.row() for g in growers],
                   range_name=f"{_col_letter(GROWERS_COL)}1", raw=False)
+        ws.update(values=series_rows, range_name=f"{_col_letter(GROWERS_SERIES_COL)}1", raw=False)
 
     requests: List[Dict[str, Any]] = [
         # Reset the whole tab to Arial 11, then bold the header (same font).
@@ -517,7 +540,14 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
             "properties": {"pixelSize": CHART_ROW_PX}, "fields": "pixelSize"}})
         index_of = {st.label: i for i, st in enumerate(stats)}
         requests += chart_requests(ws.id, rows, first_chart_row, growers=len(growers), col_widths=col_widths,
-                                   grower_alliances=[index_of.get(g.alliance, 0) for g in growers])
+                                   grower_series=[index_of[a] for a in series_alliances],
+                                   growers_title=growers_title)
+    if series_alliances:
+        # Keep the chart-data block out of sight (the chart still reads it).
+        requests.append({"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS",
+                      "startIndex": GROWERS_SERIES_COL, "endIndex": grid_width},
+            "properties": {"hiddenByUser": True}, "fields": "hiddenByUser"}})
     sh.batch_update({"requests": requests})
     # Footer only after the auto-fit above: fitting sizes a column to its
     # longest text, so the "Updated ..." line would otherwise stretch column
@@ -587,13 +617,17 @@ async def update_analytics(
 
     growers = sorted(growers, key=lambda g: g.growth_pct, reverse=True)[:TOP_GROWERS]
     growth_note = ""
+    growers_title = "Fastest growers since the checkpoint"
     if power_ctx is not None:
         if power_ctx.checkpoint_label:
             growth_note = f"Growth since the checkpoint ({power_ctx.checkpoint_label})"
+            growers_title = f"Fastest growers since the checkpoint ({power_ctx.checkpoint_label[:10]})"
         else:
-            growth_note = (f"Growth since tracking began ({power_ctx.first_snapshot or 'today'}) — "
+            since = power_ctx.first_snapshot or now_local().date().isoformat()
+            growth_note = (f"Growth since tracking began ({since}) — "
                            f"run /sheet checkpoint right after KvK to measure from there")
-    await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note)
+            growers_title = f"Fastest growers since tracking began ({since})"
+    await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note, growers_title)
     summary = f"📊 `{ANALYTICS_TAB}` tab updated {now_local().strftime('%H:%M %Z')} — {len(stats)} alliance(s)"
     if below_min:
         summary += f", {below_min} under {MIN_TOTAL_POWER / 1e9:g}B power not shown"
