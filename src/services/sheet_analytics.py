@@ -190,17 +190,66 @@ def _grid(sheet_id: int, col: int, rows: int) -> Dict[str, Any]:
 
 
 CHART_W, CHART_H, WIDE_W, WIDE_H, CHART_GAP = 560, 340, 1140, 380, 20
+# The chart area's rows are pinned to this height so the row arithmetic
+# below is exact (Sheets doesn't reliably honor large pixel offsets --
+# a chart offset ~760px down landed ~170px short, on top of the one above).
+CHART_ROW_PX = 21
+# Alliance colors: the pie colors its slices with the spreadsheet theme's
+# accent colors in table order (the API can't set pie slice colors), so the
+# power and growers bars reference the same theme accents per alliance --
+# they match the pie even if the sheet's theme is changed.
+THEME_ACCENTS = ["ACCENT1", "ACCENT2", "ACCENT3", "ACCENT4", "ACCENT5", "ACCENT6"]
 
 
-def _anchor(sheet_id: int, row: int, x: int, y: int, width: int = CHART_W, height: int = CHART_H) -> Dict[str, Any]:
-    """Every chart hangs off the same cell (column A of `row`) and is placed
-    by pixel offset, so charts can't overlap however wide the columns are."""
-    return {"overlayPosition": {"anchorCell": {"sheetId": sheet_id, "rowIndex": row, "columnIndex": 0},
-                                "offsetXPixels": x, "offsetYPixels": y,
+def alliance_color(index: int) -> Dict[str, Any]:
+    return {"themeColor": THEME_ACCENTS[index % len(THEME_ACCENTS)]}
+
+
+def _point_colors(alliance_indexes: List[int]) -> List[Dict[str, Any]]:
+    """Per-bar color overrides: bar i gets its alliance's pie color."""
+    return [{"index": i, "colorStyle": alliance_color(a)} for i, a in enumerate(alliance_indexes)]
+DEFAULT_COL_PX = 100
+
+
+def _rows_for(px: int) -> int:
+    return -(-(px + CHART_GAP) // CHART_ROW_PX)   # ceil
+
+
+def chart_layout(first_chart_row: int, col_widths: Dict[int, int]) -> Dict[str, Tuple[int, int, int]]:
+    """(anchor row, anchor column, x offset within that column) per chart.
+    Rows: pie | power, then TC stacked, then growers -- each group anchored
+    to its own row. The power chart is anchored to the column where
+    CHART_W + gap falls (column widths are set explicitly, so they're
+    known), leaving only a small in-column offset."""
+    target_x = CHART_W + CHART_GAP
+    col, left = 0, 0
+    while left + col_widths.get(col, DEFAULT_COL_PX) <= target_x:
+        left += col_widths.get(col, DEFAULT_COL_PX)
+        col += 1
+    row2 = first_chart_row + _rows_for(CHART_H)
+    row3 = row2 + _rows_for(WIDE_H)
+    return {
+        "pie": (first_chart_row, 0, 0),
+        "power": (first_chart_row, col, target_x - left),
+        "tc": (row2, 0, 0),
+        "growers": (row3, 0, 0),
+        "end": (row3 + _rows_for(WIDE_H), 0, 0),
+    }
+
+
+def _anchor(sheet_id: int, spot: Tuple[int, int, int], width: int = CHART_W, height: int = CHART_H) -> Dict[str, Any]:
+    row, col, x = spot
+    return {"overlayPosition": {"anchorCell": {"sheetId": sheet_id, "rowIndex": row, "columnIndex": col},
+                                "offsetXPixels": x, "offsetYPixels": 0,
                                 "widthPixels": width, "heightPixels": height}}
 
 
-def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int = 0) -> List[Dict[str, Any]]:
+def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int = 0,
+                   col_widths: Optional[Dict[int, int]] = None,
+                   grower_alliances: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+    """`grower_alliances`: for each growers-table row, the index of that
+    player's alliance in the main table (drives the bar color)."""
+    at = chart_layout(first_chart_row, col_widths or {})
     domain = {"sourceRange": {"sources": [_grid(sheet_id, COL["Alliance"], rows)]}}
 
     def series(name: str) -> Dict[str, Any]:
@@ -223,7 +272,8 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
             "headerCount": 1,
             "axis": [{"position": "BOTTOM_AXIS", "title": "Total power"}],
             "domains": [{"domain": domain}],
-            "series": [{"series": series("Total Power"), "targetAxis": "BOTTOM_AXIS"}],
+            "series": [{"series": series("Total Power"), "targetAxis": "BOTTOM_AXIS",
+                        "styleOverrides": _point_colors(list(range(rows)))}],
         },
     }
     tc_stacked = {
@@ -240,11 +290,9 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
     }
     requests = [
         # Row 1: pie | power bar. Row 2: TC stacked (full width). Row 3: growers.
-        {"addChart": {"chart": {"spec": tg5_pie, "position": _anchor(sheet_id, first_chart_row, 0, 0)}}},
-        {"addChart": {"chart": {"spec": power_bar,
-                                "position": _anchor(sheet_id, first_chart_row, CHART_W + CHART_GAP, 0)}}},
-        {"addChart": {"chart": {"spec": tc_stacked,
-                                "position": _anchor(sheet_id, first_chart_row, 0, CHART_H + CHART_GAP, WIDE_W, WIDE_H)}}},
+        {"addChart": {"chart": {"spec": tg5_pie, "position": _anchor(sheet_id, at["pie"])}}},
+        {"addChart": {"chart": {"spec": power_bar, "position": _anchor(sheet_id, at["power"])}}},
+        {"addChart": {"chart": {"spec": tc_stacked, "position": _anchor(sheet_id, at["tc"], WIDE_W, WIDE_H)}}},
     ]
     if growers:
         def g_grid(offset: int) -> Dict[str, Any]:
@@ -257,13 +305,12 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                 "headerCount": 1,
                 "axis": [{"position": "BOTTOM_AXIS", "title": "Growth %"}],
                 "domains": [{"domain": {"sourceRange": {"sources": [g_grid(0)]}}}],
-                "series": [{"series": {"sourceRange": {"sources": [g_grid(2)]}}, "targetAxis": "BOTTOM_AXIS"}],
+                "series": [{"series": {"sourceRange": {"sources": [g_grid(2)]}}, "targetAxis": "BOTTOM_AXIS",
+                            "styleOverrides": _point_colors(grower_alliances or [])}],
             },
         }
         requests.append({"addChart": {"chart": {"spec": growers_bar,
-                                                "position": _anchor(sheet_id, first_chart_row, 0,
-                                                                    CHART_H + WIDE_H + 2 * CHART_GAP,
-                                                                    WIDE_W, WIDE_H)}}})
+                                                "position": _anchor(sheet_id, at["growers"], WIDE_W, WIDE_H)}}})
     return requests
 
 
@@ -435,9 +482,6 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
                   "startColumnIndex": COL["Alliance"], "endColumnIndex": COL["Alliance"] + 1},
         "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
         "fields": "userEnteredFormat.horizontalAlignment"}})
-    requests += [{"deleteEmbeddedObject": {"objectId": cid}} for cid in _existing_chart_ids(sh, ws.id)]
-    if rows:
-        requests += chart_requests(ws.id, rows, first_chart_row=rows + 4 + len(footer), growers=len(growers))
     # Explicit widths from the text Sheets will display (bold headers, power
     # with separators, percentages). Google's auto-fit under-measures bold
     # text and formatted numbers, cutting off "Median Growth %" and big
@@ -454,11 +498,26 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
         for g in growers:
             for j, v in enumerate(g.row()):
                 columns[GROWERS_COL + j].append((_display(GROWERS_HEADER[j], v), False))
-    for c, texts in columns.items():
-        px = max(_text_px(t, bold) for t, bold in texts) + CELL_PADDING_PX
+    col_widths = {c: int(max(_text_px(t, bold) for t, bold in texts) + CELL_PADDING_PX)
+                  for c, texts in columns.items()}
+    for c, px in col_widths.items():
         requests.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
-            "properties": {"pixelSize": int(px)}, "fields": "pixelSize"}})
+            "properties": {"pixelSize": px}, "fields": "pixelSize"}})
+
+    requests += [{"deleteEmbeddedObject": {"objectId": cid}} for cid in _existing_chart_ids(sh, ws.id)]
+    if rows:
+        first_chart_row = rows + 4 + len(footer)
+        end_row = chart_layout(first_chart_row, col_widths)["end"][0]
+        if ws.row_count < end_row:
+            ws.add_rows(end_row - ws.row_count)
+        # Pin the chart area's row heights so each chart's anchor row is exact.
+        requests.append({"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "ROWS", "startIndex": first_chart_row, "endIndex": end_row},
+            "properties": {"pixelSize": CHART_ROW_PX}, "fields": "pixelSize"}})
+        index_of = {st.label: i for i, st in enumerate(stats)}
+        requests += chart_requests(ws.id, rows, first_chart_row, growers=len(growers), col_widths=col_widths,
+                                   grower_alliances=[index_of.get(g.alliance, 0) for g in growers])
     sh.batch_update({"requests": requests})
     # Footer only after the auto-fit above: fitting sizes a column to its
     # longest text, so the "Updated ..." line would otherwise stretch column
