@@ -315,8 +315,8 @@ def split_status(header: List[str]) -> Tuple[List[str], Optional[int]]:
     return cols, idx
 
 
-def status_formula(result: "SyncResult", pid_letter: str, synced_at: str) -> str:
-    """The status cell's formula, e.g. 📊 98/100 members · 🟩 90 matched · …"""
+def _status_body(result: "SyncResult", synced_at: str) -> str:
+    """Everything after "📊 98/100 members · "."""
     parts = [f"🟩 {result.matched} matched", f"🟨 {result.mismatched} new position",
              f"⬜ {result.position_unknown} inactive", f"🟪 {result.not_in_alliance} left"]
     if result.new_members_added:
@@ -326,9 +326,27 @@ def status_formula(result: "SyncResult", pid_letter: str, synced_at: str) -> str
     if result.skipped_no_player_id:
         parts.append(f"⏭️ {result.skipped_no_player_id} without Player ID")
     parts.append(f"synced {synced_at}")
-    text = " · ".join(parts).replace('"', '""')
+    return " · ".join(parts)
+
+
+def status_formula(result: "SyncResult", pid_letter: str, synced_at: str) -> str:
+    """The status cell's formula, e.g. 📊 98/100 members · 🟩 90 matched · …"""
+    text = _status_body(result, synced_at).replace('"', '""')
     slots = f"{pid_letter}2:{pid_letter}{DEPARTED_SECTION_ROW - 1}"
     return f'="{STATUS_PREFIX} "&COUNTA({slots})&"/{MEMBER_SLOTS} members · {text}"'
+
+
+def status_width_px(result: "SyncResult", synced_at: str) -> int:
+    """Column width that fits the status line: Google's auto-fit
+    under-measures bold text and emoji and cut off the "synced" time.
+    Measured like the Analytics tab's columns, emoji counted ~1.35em,
+    with the widest member count (100/100) and room for the filter button."""
+    from services.sheet_analytics import CELL_PADDING_PX, _FONT_PX, _text_px   # (imports this module)
+
+    text = f"{STATUS_PREFIX} {MEMBER_SLOTS}/{MEMBER_SLOTS} members · {_status_body(result, synced_at)}"
+    emoji = sum(1 for ch in text if ord(ch) >= 0x2190 and ch != "️")
+    plain = "".join(ch for ch in text if ord(ch) < 0x2190)
+    return int(_text_px(plain, bold=True) + emoji * 1.35 * _FONT_PX + CELL_PADDING_PX + FILTER_BUTTON_PX + 12)
 
 
 def _synced_at() -> str:
@@ -860,16 +878,19 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     status_col = len(header)
     if status_col + 1 > ws.col_count:
         ws.add_cols(status_col + 1 - ws.col_count)
+    synced_at = _synced_at()
     status = [{"range": f"{_col_letter(status_col)}1",
-               "values": [[status_formula(plan.result, _col_letter(pid_idx), _synced_at())]]}]
+               "values": [[status_formula(plan.result, _col_letter(pid_idx), synced_at)]]}]
     if old_status_col is not None and old_status_col != status_col:
         status.append({"range": f"{_col_letter(old_status_col)}1", "values": [[""]]})
     ws.batch_update(status, value_input_option="USER_ENTERED")
 
-    fit_status = {"autoResizeDimensions": {"dimensions": {
-        "sheetId": ws.id, "dimension": "COLUMNS", "startIndex": status_col, "endIndex": status_col + 1}}}
+    # Explicit width (auto-fit cut the line off); set after the auto-fit.
+    fit_status = {"updateDimensionProperties": {
+        "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": status_col, "endIndex": status_col + 1},
+        "properties": {"pixelSize": status_width_px(plan.result, synced_at)}, "fields": "pixelSize"}}
     ws.client.batch_update(ws.spreadsheet_id, {"requests": moves + _layout_requests(ws.id, header) + [fit_status]})
-    _pad_for_filter_buttons(ws, list(range(status_col + 1)))
+    _pad_for_filter_buttons(ws, list(range(len(header))))
 
 
 def _last_member_row(values: List[List[str]], pid_idx: int, exclude: Optional[set] = None) -> int:
