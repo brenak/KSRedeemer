@@ -59,7 +59,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.config import GOOGLE_SHEETS_CREDENTIALS_PATH, GOOGLE_SHEET_ID
 from services.mightpulse_client import MightPulseClient, MightPulseError, MightPulseRateLimited
-from services.power_growth import FLAG_COLOR, PowerContext, alliance_growth
+from services.power_growth import FLAG_COLOR, PowerContext, alliance_growth, now_local
 
 REQUIRED_COLUMNS = ("player id", "x", "y", "observed_x", "observed_y", "observed_tag",
                     "notes", "original_name")
@@ -283,6 +283,45 @@ def resolve_columns(header: List[str]) -> Dict[str, int]:
 # them inserted (see missing_auto_columns). The required columns are never
 # added automatically.
 AUTO_COLUMNS = ("Kingdom", "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %")
+
+
+# The status line: one cell in the header row, a blank column to the right of
+# the last real column (the header row is frozen and never moves when rows
+# are re-sorted). Rewritten by every real sync. The member count is a live
+# formula over the member slots; the rest is what that sync found.
+STATUS_PREFIX = "📊"
+MEMBER_SLOTS = DEPARTED_SECTION_ROW - 2   # rows 2..101
+
+
+def split_status(header: List[str]) -> Tuple[List[str], Optional[int]]:
+    """(the real header -- without the status cell and the blank column(s)
+    before it -- and the status cell's 0-based column, or None)."""
+    idx = next((i for i, h in enumerate(header) if str(h).strip().startswith(STATUS_PREFIX)), None)
+    cols = list(header[:idx] if idx is not None else header)
+    while cols and not str(cols[-1]).strip():
+        cols.pop()
+    return cols, idx
+
+
+def status_formula(result: "SyncResult", pid_letter: str, synced_at: str) -> str:
+    """The status cell's formula, e.g. 📊 98/100 members · 🟩 90 matched · …"""
+    parts = [f"🟩 {result.matched} matched", f"🟨 {result.mismatched} new position",
+             f"⬜ {result.position_unknown} inactive", f"🟪 {result.not_in_alliance} left"]
+    if result.new_members_added:
+        parts.append(f"➕ {result.new_members_added} new")
+    if result.skipped_not_found:
+        parts.append(f"⚠️ {result.skipped_not_found} not found")
+    if result.skipped_no_player_id:
+        parts.append(f"⏭️ {result.skipped_no_player_id} without Player ID")
+    parts.append(f"synced {synced_at}")
+    text = " · ".join(parts).replace('"', '""')
+    slots = f"{pid_letter}2:{pid_letter}{DEPARTED_SECTION_ROW - 1}"
+    return f'="{STATUS_PREFIX} "&COUNTA({slots})&"/{MEMBER_SLOTS} members · {text}"'
+
+
+def _synced_at() -> str:
+    now = now_local()
+    return f"{now:%b} {now.day} {now:%H:%M %Z}".strip()
 
 
 def _column_present(norm: set, name: str) -> bool:
@@ -717,7 +756,7 @@ def _player_id_column(all_values: List[List[str]], pid_idx: int) -> List[str]:
 
 
 def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
-                pid_idx: int, expected_ids: List[str]) -> None:
+                pid_idx: int, expected_ids: List[str], old_status_col: Optional[int] = None) -> None:
     # The MightPulse lookups take minutes; if rows were inserted, deleted or
     # re-sorted meanwhile, every planned cell address would be off. Re-read
     # and refuse to write rather than paint the wrong rows.
@@ -786,8 +825,22 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     moves, rows_needed = _arrange_rows(ws.id, active, inactive, sorted(departed))
     if rows_needed > ws.row_count:
         ws.add_rows(rows_needed - ws.row_count)
-    ws.client.batch_update(ws.spreadsheet_id, {"requests": moves + _layout_requests(ws.id, header)})
-    _pad_for_filter_buttons(ws, len(header))
+    # Status line: header row, one blank column after the last real column.
+    status_col = len(header) + 1
+    if status_col + 1 > ws.col_count:
+        ws.add_cols(status_col + 1 - ws.col_count)
+    status = [{"range": f"{_col_letter(status_col)}1",
+               "values": [[status_formula(plan.result, _col_letter(pid_idx), _synced_at())]]}]
+    if old_status_col is not None and old_status_col != status_col:
+        status.append({"range": f"{_col_letter(old_status_col)}1", "values": [[""]]})
+    ws.batch_update(status, value_input_option="USER_ENTERED")
+
+    fit_status = {"autoResizeDimensions": {"dimensions": {
+        "sheetId": ws.id, "dimension": "COLUMNS", "startIndex": status_col, "endIndex": status_col + 1}}}
+    ws.client.batch_update(ws.spreadsheet_id, {"requests": moves + _layout_requests(ws.id, header) + [fit_status]})
+    # Not the blank gap column: it isn't auto-fit, so padding it would widen
+    # it a little more every run.
+    _pad_for_filter_buttons(ws, list(range(len(header))) + [status_col])
 
 
 def _last_member_row(values: List[List[str]], pid_idx: int, exclude: Optional[set] = None) -> int:
@@ -823,7 +876,7 @@ def _place_new_rows(ws, new_rows: List[List[Optional[str]]], current: List[List[
     return start
 
 
-def _pad_for_filter_buttons(ws, ncols: int) -> None:
+def _pad_for_filter_buttons(ws, cols: List[int]) -> None:
     """Google's auto-fit ignores the filter dropdown in each header cell,
     so the end of the header (e.g. the "x" of observed_x) hides behind it.
     Read back the fitted widths and widen each column by the button."""
@@ -831,13 +884,13 @@ def _pad_for_filter_buttons(ws, ncols: int) -> None:
         ws.spreadsheet_id, params={"fields": "sheets(properties(sheetId),data(columnMetadata(pixelSize)))"}
     )
     sheet = next((s for s in meta.get("sheets", []) if s.get("properties", {}).get("sheetId") == ws.id), None)
-    columns = ((sheet or {}).get("data") or [{}])[0].get("columnMetadata", [])[:ncols]
+    columns = ((sheet or {}).get("data") or [{}])[0].get("columnMetadata", [])
     requests = [
         {"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
-            "properties": {"pixelSize": col["pixelSize"] + FILTER_BUTTON_PX},
+            "properties": {"pixelSize": columns[c]["pixelSize"] + FILTER_BUTTON_PX},
             "fields": "pixelSize"}}
-        for c, col in enumerate(columns) if col.get("pixelSize")
+        for c in cols if c < len(columns) and columns[c].get("pixelSize")
     ]
     if requests:
         ws.client.batch_update(ws.spreadsheet_id, {"requests": requests})
@@ -937,10 +990,11 @@ async def sync_alliance_sheet(
     # gspread is blocking -- keep it off the event loop.
     sh, ws, all_values = await asyncio.to_thread(_read_sheet, tab)
     fresh = _is_blank(all_values)  # new or blank tab: gets DEFAULT_HEADER + every member
+    status_col = None
     if fresh:
         header, data_rows = list(DEFAULT_HEADER), []
     else:
-        header, data_rows = all_values[0], all_values[1:]
+        (header, status_col), data_rows = split_status(all_values[0]), all_values[1:]
     col = resolve_columns(header)  # fail fast before spending API quota
 
     try:
@@ -978,7 +1032,7 @@ async def sync_alliance_sheet(
     if columns_added and not dry_run:
         await asyncio.to_thread(_add_columns, ws, header, columns_added)
         all_values = await asyncio.to_thread(ws.get_all_values)
-        header, data_rows = all_values[0], all_values[1:]
+        (header, status_col), data_rows = split_status(all_values[0]), all_values[1:]
         col = resolve_columns(header)
 
     # Members a fresher roster of another tracked alliance also lists have
@@ -999,6 +1053,6 @@ async def sync_alliance_sheet(
             ws = await asyncio.to_thread(_create_tab, sh, tab)
         pid_idx = col["player id"]
         await asyncio.to_thread(
-            _write_plan, ws, plan, header, fresh, pid_idx, _player_id_column(all_values, pid_idx)
+            _write_plan, ws, plan, header, fresh, pid_idx, _player_id_column(all_values, pid_idx), status_col
         )
     return plan.result
