@@ -105,11 +105,9 @@ FILTER_BUTTON_PX = 14
 # Font applied to a new/blank tab (Sheets' own default is Arial 10).
 TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
-# Written into a blank/new tab. Highlight covers A..observed_y (K here);
-# notes sits just past it and keeps its own formatting. "Member #" is
-# written as a self-filling formula (MEMBER_NUMBER_FORMULA), not text.
-MEMBER_NUMBER_HEADER = "Member #"
-DEFAULT_HEADER = [MEMBER_NUMBER_HEADER, "Kingdom", "Player ID", "Original_Name", "Current_Name",
+# Written into a blank/new tab. Highlight covers A..observed_y; notes sits
+# just past it and keeps its own formatting.
+DEFAULT_HEADER = ["Kingdom", "Player ID", "Original_Name", "Current_Name",
                   "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %", "x", "y",
                   "observed_tag", "observed_x", "observed_y", "notes"]
 
@@ -132,11 +130,6 @@ GROWTH_NUMBER_FORMATS = {
     "week_pct": {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}},
     "vs_alliance": {"numberFormat": {"type": "NUMBER", "pattern": '0.0"×"'}},
 }
-# Header cell that displays "Member #" and numbers every row with a Player
-# ID 1..N top-down (renumbers after sorting/filtering). The column below it
-# must stay empty for the array to fill -- which is why appended rows skip
-# unset cells (None) instead of writing "".
-MEMBER_NUMBER_FORMULA = '={{"{header}"; ARRAYFORMULA(IF({pid}2:{pid}="", , ROW({pid}2:{pid})-1))}}'
 
 
 class SheetSyncError(Exception):
@@ -287,8 +280,8 @@ def resolve_columns(header: List[str]) -> Dict[str, int]:
 
 
 # Columns the sync fills itself; an existing tab missing any of them gets
-# them inserted (see missing_auto_columns). Member # and the required
-# columns are never added automatically.
+# them inserted (see missing_auto_columns). The required columns are never
+# added automatically.
 AUTO_COLUMNS = ("Kingdom", "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %")
 
 
@@ -442,7 +435,10 @@ def plan_sync(
         row_num = offset + 2  # 1-indexed, +1 for the header row
         pid = _parse_int_cell(row, col["player id"])
         if pid is None:
-            result.skipped_no_player_id += 1
+            # Only rows someone put something in: empty slots in the member
+            # list (which this sync may fill with new members) aren't problems.
+            if any(str(c).strip() for c in row):
+                result.skipped_no_player_id += 1
             continue
         seen.add(pid)
 
@@ -539,7 +535,7 @@ def plan_sync(
         player = players.get(fid) or {}
         nick = member.get("nick_name") or player.get("nick_name") or ""
         # None = skip the cell (JSON null), so appending never blanks out a
-        # formula column like Member # or anything a human added.
+        # formula column or anything a human added.
         new_row: List[Optional[str]] = [None] * len(header)
         new_row[col["player id"]] = str(fid)
         # Original_Name is only ever written here, at first sight.
@@ -687,18 +683,6 @@ def _is_blank(values: List[List[Any]]) -> bool:
     return not any(str(c).strip() for r in values for c in r)
 
 
-def _header_row_to_write(header: List[str]) -> List[str]:
-    """DEFAULT_HEADER as written: Member # becomes its numbering formula."""
-    norm = [h.strip().lower() for h in header]
-    row = list(header)
-    if MEMBER_NUMBER_HEADER.lower() in norm and "player id" in norm:
-        pid = _col_letter(norm.index("player id"))
-        row[norm.index(MEMBER_NUMBER_HEADER.lower())] = MEMBER_NUMBER_FORMULA.format(
-            header=MEMBER_NUMBER_HEADER, pid=pid
-        )
-    return row
-
-
 def _init_header(ws, header: List[str]) -> None:
     # Whole tab (every row/column, so appended rows match): Arial 11 instead
     # of Sheets' Arial 10 default. Field mask touches only font family/size.
@@ -707,8 +691,7 @@ def _init_header(ws, header: List[str]) -> None:
         "cell": {"userEnteredFormat": {"textFormat": dict(TAB_FONT)}},
         "fields": "userEnteredFormat.textFormat(fontFamily,fontSize)",
     }}]})
-    # USER_ENTERED so the Member # formula is evaluated, not stored as text.
-    ws.update(values=[_header_row_to_write(header)], range_name="A1", raw=False)
+    ws.update(values=[list(header)], range_name="A1", raw=True)
     ws.freeze(rows=1)
     # ws.format replaces the whole textFormat, so the font must ride along
     # with bold or the header would fall back to the default font.
@@ -760,13 +743,11 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     inactive = list(plan.inactive_rows)
     departed = set(plan.departed_rows)
     # The member list ends at the last member's row -- not the last row with
-    # any value (a column like =SEQUENCE(100) under Member # fills rows with
+    # any value (a number-only column like =SEQUENCE(100) fills rows with
     # no member in them), and not an ex-member parked below the list.
     last_member_row = _last_member_row(current, pid_idx, exclude=departed)
     if plan.new_rows:
-        norm = [h.strip().lower() for h in header]
-        member_col = norm.index(MEMBER_NUMBER_HEADER.lower()) if MEMBER_NUMBER_HEADER.lower() in norm else None
-        start = _place_new_rows(ws, plan.new_rows, current, last_member_row, member_col)
+        start = _place_new_rows(ws, plan.new_rows, current, last_member_row)
         colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
         inactive += [start + i for i, c in enumerate(plan.new_row_colors) if c == INACTIVE_COLOR]
 
@@ -820,19 +801,18 @@ def _last_member_row(values: List[List[str]], pid_idx: int, exclude: Optional[se
 
 
 def _place_new_rows(ws, new_rows: List[List[Optional[str]]], current: List[List[str]],
-                    last_member_row: int, member_number_col: Optional[int]) -> int:
+                    last_member_row: int) -> int:
     """Write new members directly under the last member and return the
     first row used. Cells we have no value for are sent as null (skipped),
-    so a formula column like Member # is untouched. The rows used must be
-    empty apart from the Member # column (formula output such as
-    =SEQUENCE(100)); if anything else is there -- someone's note, say --
-    fall back to append_rows (after the last non-empty row) rather than
-    write a member into that row."""
+    so formula columns are untouched. The rows used must be empty; if
+    anything is there -- someone's note, say -- fall back to append_rows
+    (after the last non-empty row) rather than write a member into that
+    row."""
     start = last_member_row + 1
     for k in range(len(new_rows)):
         r = start + k
         existing = current[r - 1] if r - 1 < len(current) else []
-        if any(cell.strip() for c, cell in enumerate(existing) if c != member_number_col):
+        if any(cell.strip() for cell in existing):
             response = ws.append_rows(new_rows, value_input_option="USER_ENTERED")
             return _appended_start_row(response) or len(current) + 1
 

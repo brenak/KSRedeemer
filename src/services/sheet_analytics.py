@@ -69,7 +69,6 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
      "Check in with them."),
 ]
 LEGEND_COLUMNS: List[Tuple[str, str]] = [
-    ("Member #", "Automatic count 1…N from the top (renumbers after sorting)."),
     ("Kingdom, Current_Name, Rank, TC_Level, Power",
      "Live — refreshed from MightPulse on every sync. TC_Level shows True Gold tiers (55 = TG5, 54 = TG4.4)."),
     ("Original_Name", "The name when the member was first added. Never changed."),
