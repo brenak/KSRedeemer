@@ -110,12 +110,14 @@ HEADER = (["Alliance", "Kingdom", "Members"] + [b[0] for b in TC_BUCKETS]
 COL = {h: i for i, h in enumerate(HEADER)}
 POWER_COLUMNS = ("Total Power", "Avg Power", "Top Power")
 
-# "Fastest growers" table, one blank column to the right of the main table.
-GROWERS_HEADER = ["Fastest growers", "Alliance", "Growth %", "Power gained"]
+# "Top power gains" table, one blank column to the right of the main table.
+# Ranked by raw power gained, not Growth %: a percentage flatters small
+# accounts (a 14M player gaining 1M outranked a 185M one gaining 12M).
+GROWERS_HEADER = ["Top power gains", "Alliance", "Power gained", "Growth %"]
 GROWERS_COL = len(HEADER) + 1
 TOP_GROWERS = 10
 # Hidden chart-data block right of the growers table: one column per
-# alliance (header = alliance label), holding a grower's Growth % only in
+# alliance (header = alliance label), holding a player's power gained only in
 # their own alliance's column. Feeding the chart one series per alliance
 # is what gives it an alliance color legend; stacked, each player still
 # shows as a single bar.
@@ -126,7 +128,7 @@ def growers_series_block(growers: List["Grower"], alliance_order: List[str]) -> 
     """(alliances with at least one grower, in main-table order; rows of
     the hidden block -- header row first)."""
     present = [a for a in alliance_order if any(g.alliance == a for g in growers)]
-    rows = [present] + [[round(g.growth_pct, 4) if g.alliance == a else "" for a in present] for g in growers]
+    rows = [present] + [[g.gain if g.alliance == a else "" for a in present] for g in growers]
     return present, rows
 
 
@@ -139,7 +141,7 @@ class Grower:
     flagged: bool
 
     def row(self) -> List[Any]:
-        return [self.name, self.alliance, round(self.growth_pct, 4), self.gain]
+        return [self.name, self.alliance, self.gain, round(self.growth_pct, 4)]
 
 
 @dataclass
@@ -263,7 +265,7 @@ def _anchor(sheet_id: int, spot: Tuple[int, int, int], width: int = CHART_W, hei
 def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int = 0,
                    col_widths: Optional[Dict[int, int]] = None,
                    grower_series: Optional[List[int]] = None,
-                   growers_title: str = "Fastest growers since the checkpoint") -> List[Dict[str, Any]]:
+                   growers_title: str = "Top power gains since the checkpoint") -> List[Dict[str, Any]]:
     """`grower_series`: main-table index of each alliance column in the
     hidden growers block (GROWERS_SERIES_COL on), in order -- drives each
     series' color so it matches the pie."""
@@ -324,7 +326,7 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                 "stackedType": "STACKED",
                 "legendPosition": "RIGHT_LEGEND",
                 "headerCount": 1,
-                "axis": [{"position": "BOTTOM_AXIS", "title": "Growth %"}],
+                "axis": [{"position": "BOTTOM_AXIS", "title": "Power gained"}],
                 "domains": [{"domain": {"sourceRange": {"sources": [g_grid(0)]}}}],
                 "series": [{"series": {"sourceRange": {"sources": [_grid(sheet_id, GROWERS_SERIES_COL + j, growers)]}},
                             "targetAxis": "BOTTOM_AXIS", "colorStyle": alliance_color(idx)}
@@ -434,7 +436,7 @@ def write_legend(sh) -> None:
 
 
 def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optional[List[Grower]] = None,
-                    growth_note: str = "", growers_title: str = "Fastest growers since the checkpoint") -> None:
+                    growth_note: str = "", growers_title: str = "Top power gains since the checkpoint") -> None:
     """Rewrite the Analytics tab (blocking): tables, formatting, charts."""
     growers = growers or []
     series_alliances, series_rows = growers_series_block(growers, [st.label for st in stats])
@@ -489,20 +491,20 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
             "fields": "userEnteredFormat.numberFormat"}})
     percent = {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}}
     for c, number_format, n in ((COL["Median Growth %"], percent, rows),
-                                (GROWERS_COL + 2, percent, len(growers)),
-                                (GROWERS_COL + 3, POWER_NUMBER_FORMAT, len(growers))):
+                                (GROWERS_COL + 2, POWER_NUMBER_FORMAT, len(growers)),
+                                (GROWERS_COL + 3, percent, len(growers))):
         if n:
             requests.append({"repeatCell": {
                 "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": n + 1,
                           "startColumnIndex": c, "endColumnIndex": c + 1},
                 "cell": {"userEnteredFormat": number_format}, "fields": "userEnteredFormat.numberFormat"}})
     if series_alliances:
-        # The growers chart takes its number format from these hidden cells:
-        # percent, so the axis and tooltips read 9.1%, not 0.
+        # The chart takes its number format from these hidden cells: power
+        # with separators, so the axis and tooltips read 12,411,826.
         requests.append({"repeatCell": {
             "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": len(growers) + 1,
                       "startColumnIndex": GROWERS_SERIES_COL, "endColumnIndex": grid_width},
-            "cell": {"userEnteredFormat": percent}, "fields": "userEnteredFormat.numberFormat"}})
+            "cell": {"userEnteredFormat": POWER_NUMBER_FORMAT}, "fields": "userEnteredFormat.numberFormat"}})
     for i, g in enumerate(growers, start=1):
         if g.flagged:
             requests.append({"repeatCell": {
@@ -627,18 +629,18 @@ async def update_analytics(
                         for fid, g in growth.items() if g.growth_pct is not None and g.gain]
         stats.append(s)
 
-    growers = sorted(growers, key=lambda g: g.growth_pct, reverse=True)[:TOP_GROWERS]
+    growers = sorted(growers, key=lambda g: g.gain, reverse=True)[:TOP_GROWERS]
     growth_note = ""
-    growers_title = "Fastest growers since the checkpoint"
+    growers_title = "Top power gains since the checkpoint"
     if power_ctx is not None:
         if power_ctx.checkpoint_label:
             growth_note = f"Growth since the checkpoint ({power_ctx.checkpoint_label})"
-            growers_title = f"Fastest growers since the checkpoint ({power_ctx.checkpoint_label[:10]})"
+            growers_title = f"Top power gains since the checkpoint ({power_ctx.checkpoint_label[:10]})"
         else:
             since = power_ctx.first_snapshot or now_local().date().isoformat()
             growth_note = (f"Growth since tracking began ({since}) — "
                            f"run /sheet checkpoint right after KvK to measure from there")
-            growers_title = f"Fastest growers since tracking began ({since})"
+            growers_title = f"Top power gains since tracking began ({since})"
     await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note, growers_title)
     summary = f"📊 `{ANALYTICS_TAB}` tab updated {now_local().strftime('%H:%M %Z')} — {len(stats)} alliance(s)"
     if below_min:

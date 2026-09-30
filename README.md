@@ -219,7 +219,7 @@ To spot people spending instead of saving for KvK, every real sync records each 
   - `vs Alliance` — that growth as a multiple of the alliance's median growth (1.0× = typical; the median counts as at least 1%, so a flat alliance doesn't make every small gain an outlier)
   - `7d Growth %` — growth over the last 7 days (blank until a week of history exists)
 - **Flag:** the `vs Alliance` cell turns red when it's at least **2×** the median **and** the player gained at least **5M** power — comparing against the alliance rather than a fixed % keeps small accounts (which grow faster in % terms) from being flagged unfairly. Flagged names are listed in the `/sheet sync` summary (🔴 in the daily line).
-- **Analytics:** a `Median Growth %` column per alliance, plus a "Fastest growers" top-10 table and chart across all alliances (flagged players highlighted).
+- **Analytics:** a `Median Growth %` column per alliance, plus a "Top power gains" top-10 table and chart across all alliances — ranked by raw power gained, with each player's Growth % alongside (flagged players highlighted).
 
 **Analytics tab.** After every real `/sheet sync` (not dry runs), and on `/sheet analytics`, the bot rewrites an `Analytics` tab comparing **all** configured alliances — even ones not synced in that run:
 
