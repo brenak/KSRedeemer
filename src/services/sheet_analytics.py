@@ -50,10 +50,10 @@ RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB, HISTORY_TAB)
 LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
     (MATCH_COLOR, "Matched", "On the alliance roster, at the position recorded in x / y.", "Nothing to do."),
     (MISMATCH_COLOR, "Moved",
-     "On the roster, but at a different position than x / y. The new position is in observed_x / observed_y.",
+     "On the roster, but at a different position than x / y. The new position is in o_x / o_y.",
      "Check it, then update x / y by hand."),
     (NOT_IN_ALLIANCE_COLOR, "Left the alliance",
-     "No longer on this alliance's roster. observed_tag shows where they went: a tag, \"none\" (no "
+     "No longer on this alliance's roster. o_tag shows where they went: a tag, \"none\" (no "
      "alliance), or \"left\" (MightPulse hasn't caught up yet). Moved below the 100 member slots "
      "(row 102 on).",
      "Follow up, or remove the row."),
@@ -69,14 +69,14 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
      "Check in with them."),
 ]
 LEGEND_COLUMNS: List[Tuple[str, str]] = [
-    ("📊 status (header row, right of the last column)",
+    ("📊 status (header row, after the last column)",
      "Members in the 100 slots (live count), then what the last sync found: matched, new position, "
      "inactive, left, new, and when it ran. Rewritten every sync."),
     ("Kingdom, Current_Name, Rank, TC_Level, Power",
      "Live — refreshed from MightPulse on every sync. TC_Level shows True Gold tiers (55 = TG5, 54 = TG4.4)."),
     ("Original_Name", "The name when the member was first added. Never changed."),
     ("Current_Tag, x, y", "Recorded values — set when the member is added, then only changed by hand."),
-    ("observed_tag, observed_x, observed_y",
+    ("o_tag, o_x, o_y",
      "The live value, filled in only while it differs from Current_Tag / x / y; cleared once they match again."),
     ("notes", "\"not found\" is written by the sync; otherwise the column is yours."),
     ("Growth %", "Power growth since the checkpoint (/sheet checkpoint, run right after KvK). Blank until "
@@ -467,11 +467,14 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
                                   "startColumnIndex": 0, "endColumnIndex": width},
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, **TAB_FONT}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        # Clear last run's flag colors and alignment before re-applying (rows
-        # shift when the number of alliances changes).
+        # Clear last run's flag colors, alignment and number formats before
+        # re-applying (rows and columns shift as alliances come and go, and
+        # ws.clear() only clears values -- a leftover "#,##0" once turned the
+        # growers chart's percentages into 0s).
         {"repeatCell": {"range": {"sheetId": ws.id},
                         "cell": {"userEnteredFormat": {}},
-                        "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment"}},
+                        "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment,"
+                                  "userEnteredFormat.numberFormat"}},
         {"updateSheetProperties": {"properties": {"sheetId": ws.id, "gridProperties": {"frozenRowCount": 1}},
                                    "fields": "gridProperties.frozenRowCount"}},
         # Keep Analytics as the first tab (no-op if it already is).
@@ -493,6 +496,13 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
                 "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": n + 1,
                           "startColumnIndex": c, "endColumnIndex": c + 1},
                 "cell": {"userEnteredFormat": number_format}, "fields": "userEnteredFormat.numberFormat"}})
+    if series_alliances:
+        # The growers chart takes its number format from these hidden cells:
+        # percent, so the axis and tooltips read 9.1%, not 0.
+        requests.append({"repeatCell": {
+            "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": len(growers) + 1,
+                      "startColumnIndex": GROWERS_SERIES_COL, "endColumnIndex": grid_width},
+            "cell": {"userEnteredFormat": percent}, "fields": "userEnteredFormat.numberFormat"}})
     for i, g in enumerate(growers, start=1):
         if g.flagged:
             requests.append({"repeatCell": {

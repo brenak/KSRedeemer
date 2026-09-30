@@ -23,22 +23,22 @@ For every sheet row with a Player ID (the in-game FID):
 - Tag: `Current_Tag` is a recorded value like x/y (seeded when the row is
   added, otherwise only changed by hand). Their live tag -- this alliance's
   if they're on the roster, else their new tag, "none" (no alliance) or
-  "left" (lookup too stale to say where) -- goes into `observed_tag` when
-  it differs from Current_Tag, and observed_tag is cleared when it
+  "left" (lookup too stale to say where) -- goes into `o_tag` when
+  it differs from Current_Tag, and o_tag is cleared when it
   matches. A tab without Current_Tag compares against the tab's alliance.
 - Not on the roster -> row painted NOT_IN_ALLIANCE_COLOR. Position isn't
   compared.
 - On the roster -> compare the sheet's `x`/`y` (recorded, never
   overwritten here) with the lookup's current x/y:
-  - match -> clear observed_x/observed_y, paint MATCH_COLOR
-  - differ -> write current x/y into observed_x/observed_y, MISMATCH_COLOR
+  - match -> clear o_x/o_y, paint MATCH_COLOR
+  - differ -> write current x/y into o_x/o_y, MISMATCH_COLOR
   - no position available (MightPulse has no map location -- in practice
     an inactive player) -> INACTIVE_COLOR, and the row is moved below the
     active ones; counted as position_unknown
 
 Roster members with no row at all are appended at the bottom with Player
 ID, name, Original_Name, Kingdom, Current_Tag, and x/y seeded from their
-current state (so they start out green with empty observed_* columns;
+current state (so they start out green with empty o_* columns;
 later changes then show up as above). Other columns (notes, anything
 hand-curated) are left blank.
 
@@ -48,7 +48,7 @@ above. (A dry run creates/writes nothing and just previews.)
 
 Columns are resolved by header NAME (case-insensitive), not letter, so
 reordering or adding columns is safe. Row highlight runs from column A to
-the last of observed_x/observed_y -- extra columns a human adds past that
+the last of o_x/o_y -- extra columns a human adds past that
 are never repainted.
 """
 
@@ -63,9 +63,15 @@ from services.power_growth import FLAG_COLOR, PowerContext, alliance_growth, now
 
 REQUIRED_COLUMNS = ("player id", "x", "y", "observed_x", "observed_y", "observed_tag",
                     "notes", "original_name")
+# Short header names on the sheet (old long name -> new). The code keeps the
+# long names as its internal keys; resolve_columns accepts either, and a real
+# sync renames old headers in place (header_renames). p_x / p_y are KSHive's
+# planned-position columns -- renamed here too, KSHive moves them next to x / y.
+HEADER_RENAMES = {"observed_tag": "o_tag", "observed_x": "o_x", "observed_y": "o_y",
+                  "planned_x": "p_x", "planned_y": "p_y"}
 LABEL_COLUMN_CANDIDATES = ("current_name", "label/name", "label", "name")
 # Optional columns, used when present: "current_tag" (recorded tag that
-# observed_tag is compared against) and "kingdom" (live kingdom number).
+# o_tag is compared against) and "kingdom" (live kingdom number).
 
 MATCH_COLOR = "4ea72e"
 MISMATCH_COLOR = "fbbc04"
@@ -105,11 +111,11 @@ FILTER_BUTTON_PX = 14
 # Font applied to a new/blank tab (Sheets' own default is Arial 10).
 TAB_FONT = {"fontFamily": "Arial", "fontSize": 11}
 
-# Written into a blank/new tab. Highlight covers A..observed_y; notes sits
+# Written into a blank/new tab. Highlight covers A..o_y; notes sits
 # just past it and keeps its own formatting.
 DEFAULT_HEADER = ["Kingdom", "Player ID", "Original_Name", "Current_Name",
                   "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %", "x", "y",
-                  "observed_tag", "observed_x", "observed_y", "notes"]
+                  "o_tag", "o_x", "o_y", "notes"]
 
 # Optional live stat columns -- refreshed every sync when the tab has them.
 # canonical key -> accepted header names (case-insensitive).
@@ -151,6 +157,7 @@ class SyncResult:
     new_members_added: int = 0
     new_member_nicks: List[str] = field(default_factory=list)
     columns_added: List[str] = field(default_factory=list)   # optional columns inserted into an existing tab
+    headers_renamed: List[str] = field(default_factory=list)  # "observed_x → o_x" -- long names shortened
     flagged_nicks: List[str] = field(default_factory=list)   # growing much faster than the alliance
     # "created" (tab didn't exist) / "initialized" (tab was blank) / ""
     tab_setup: str = ""
@@ -189,6 +196,9 @@ class SyncResult:
         if self.columns_added:
             added = ", ".join(f"`{c}`" for c in self.columns_added)
             lines.append(f"🧱 {'Would add' if self.dry_run else 'Added'} column(s): {added}")
+        if self.headers_renamed:
+            lines.append(f"🔤 {'Would rename' if self.dry_run else 'Renamed'} header(s): "
+                         + ", ".join(self.headers_renamed))
         if self.labels_updated:
             lines.append(f"🏷️ Names updated: {self.labels_updated}")
         if self.kingdoms_changed:
@@ -258,7 +268,10 @@ def _parse_int_cell(row: List[str], idx: int) -> Optional[int]:
 
 def resolve_columns(header: List[str]) -> Dict[str, int]:
     norm = {h.strip().lower(): i for i, h in enumerate(header)}
-    missing = [c for c in REQUIRED_COLUMNS if c not in norm]
+    for old, new in HEADER_RENAMES.items():   # o_x also answers to observed_x, etc.
+        if new in norm and old not in norm:
+            norm[old] = norm[new]
+    missing = [HEADER_RENAMES.get(c, c) for c in REQUIRED_COLUMNS if c not in norm]
     if missing:
         raise SheetSyncError(
             f"Sheet header is missing required column(s): {', '.join(missing)}. "
@@ -285,16 +298,15 @@ def resolve_columns(header: List[str]) -> Dict[str, int]:
 AUTO_COLUMNS = ("Kingdom", "Current_Tag", "Rank", "TC_Level", "Power", "Growth %", "vs Alliance", "7d Growth %")
 
 
-# The status line: one cell in the header row, a blank column to the right of
-# the last real column (the header row is frozen and never moves when rows
-# are re-sorted). Rewritten by every real sync. The member count is a live
+# The status line: one cell in the header row, right after the last real
+# column (the header row is frozen and never moves when rows are re-sorted). Rewritten by every real sync. The member count is a live
 # formula over the member slots; the rest is what that sync found.
 STATUS_PREFIX = "📊"
 MEMBER_SLOTS = DEPARTED_SECTION_ROW - 2   # rows 2..101
 
 
 def split_status(header: List[str]) -> Tuple[List[str], Optional[int]]:
-    """(the real header -- without the status cell and the blank column(s)
+    """(the real header -- without the status cell and any blank column(s)
     before it -- and the status cell's 0-based column, or None)."""
     idx = next((i for i, h in enumerate(header) if str(h).strip().startswith(STATUS_PREFIX)), None)
     cols = list(header[:idx] if idx is not None else header)
@@ -331,6 +343,21 @@ def _column_present(norm: set, name: str) -> bool:
         if key in aliases:
             return any(a in norm for a in aliases)
     return key in norm
+
+
+def header_renames(header: List[str]) -> List[Tuple[int, str, str]]:
+    """(column, old name, new name) for every header still using a long name."""
+    out = []
+    for i, h in enumerate(header):
+        new = HEADER_RENAMES.get(h.strip().lower())
+        if new:
+            out.append((i, h.strip(), new))
+    return out
+
+
+def _rename_headers(ws, renames: List[Tuple[int, str, str]]) -> None:
+    ws.batch_update([{"range": f"{_col_letter(i)}1", "values": [[new]]} for i, _old, new in renames],
+                    value_input_option="RAW")
 
 
 def missing_auto_columns(header: List[str]) -> List[str]:
@@ -526,7 +553,7 @@ def plan_sync(
                     flag_cells.append((row_num, _col_letter(col["vs_alliance"])))
 
         # Tag is compared against the recorded Current_Tag (like x/y), and
-        # the live one surfaces in observed_tag only when they differ.
+        # the live one surfaces in o_tag only when they differ.
         if member is not None:
             live_tag = abbr
         elif moved:
@@ -606,7 +633,11 @@ def plan_sync(
         result.new_members_added += 1
         result.new_member_nicks.append(nick or f"fid={fid}")
 
-    highlight_end = _col_letter(max(col["observed_x"], col["observed_y"]))
+    # Row color runs A..o_y -- and past it over KSHive's p_x / p_y when they
+    # sit there (their spot before they moved next to x / y). Otherwise
+    # those cells keep whatever color they had when inserted -- a returning
+    # member's planned cells stayed purple.
+    highlight_end = _col_letter(max(col[k] for k in ("observed_x", "observed_y", "p_x", "p_y", "planned_x", "planned_y") if k in col))
     power_col = _col_letter(col["power"]) if "power" in col else None
     column_formats = [(_col_letter(col[k]), f) for k, f in GROWTH_NUMBER_FORMATS.items() if k in col]
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
@@ -825,8 +856,8 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     moves, rows_needed = _arrange_rows(ws.id, active, inactive, sorted(departed))
     if rows_needed > ws.row_count:
         ws.add_rows(rows_needed - ws.row_count)
-    # Status line: header row, one blank column after the last real column.
-    status_col = len(header) + 1
+    # Status line: header row, right after the last real column.
+    status_col = len(header)
     if status_col + 1 > ws.col_count:
         ws.add_cols(status_col + 1 - ws.col_count)
     status = [{"range": f"{_col_letter(status_col)}1",
@@ -838,9 +869,7 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     fit_status = {"autoResizeDimensions": {"dimensions": {
         "sheetId": ws.id, "dimension": "COLUMNS", "startIndex": status_col, "endIndex": status_col + 1}}}
     ws.client.batch_update(ws.spreadsheet_id, {"requests": moves + _layout_requests(ws.id, header) + [fit_status]})
-    # Not the blank gap column: it isn't auto-fit, so padding it would widen
-    # it a little more every run.
-    _pad_for_filter_buttons(ws, list(range(len(header))) + [status_col])
+    _pad_for_filter_buttons(ws, list(range(status_col + 1)))
 
 
 def _last_member_row(values: List[List[str]], pid_idx: int, exclude: Optional[set] = None) -> int:
@@ -878,7 +907,7 @@ def _place_new_rows(ws, new_rows: List[List[Optional[str]]], current: List[List[
 
 def _pad_for_filter_buttons(ws, cols: List[int]) -> None:
     """Google's auto-fit ignores the filter dropdown in each header cell,
-    so the end of the header (e.g. the "x" of observed_x) hides behind it.
+    so the end of the header (e.g. the "x" of o_x) hides behind it.
     Read back the fitted widths and widen each column by the button."""
     meta = ws.client.fetch_sheet_metadata(
         ws.spreadsheet_id, params={"fields": "sheets(properties(sheetId),data(columnMetadata(pixelSize)))"}
@@ -1028,6 +1057,14 @@ async def sync_alliance_sheet(
     # Existing tab missing some of the bot-filled columns: insert them (real
     # runs only, and only now that MightPulse has answered), then re-read so
     # every planned cell address matches the new layout.
+    # Long header names (o_x, planned_x, ...) -> short ones, in place.
+    renames = [] if fresh else header_renames(header)
+    if renames and not dry_run:
+        await asyncio.to_thread(_rename_headers, ws, renames)
+        header = list(header)
+        for i, _old, new in renames:
+            header[i] = new
+
     columns_added = [] if fresh else missing_auto_columns(header)
     if columns_added and not dry_run:
         await asyncio.to_thread(_add_columns, ws, header, columns_added)
@@ -1046,6 +1083,7 @@ async def sync_alliance_sheet(
     plan = plan_sync(header, data_rows, roster_abbr, roster, players, moved_to, growth)
     plan.result.dry_run = dry_run
     plan.result.columns_added = columns_added
+    plan.result.headers_renamed = [f"{old} → {new}" for _i, old, new in renames]
     if fresh:
         plan.result.tab_setup = "created" if ws is None else "initialized"
     if not dry_run:

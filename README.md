@@ -166,12 +166,12 @@ The API key allows 60 requests/minute and 5,000/day, so the bot is deliberately 
 
 For each row with a `Player ID`:
 
-| Situation | Written | Row color (A → `observed_y`) |
+| Situation | Written | Row color (A → `o_y`) |
 |---|---|---|
 | Unknown to MightPulse | `notes` = "not found" | unchanged |
 | No longer on the alliance roster | (tag handling below) | 🟪 `#8e7cc3` |
-| On the roster, position matches `x`/`y` | `observed_x`/`observed_y` cleared | 🟩 `#4ea72e` |
-| On the roster, position differs | current position → `observed_x`/`observed_y` | 🟨 `#fbbc04` |
+| On the roster, position matches `x`/`y` | `o_x`/`o_y` cleared | 🟩 `#4ea72e` |
+| On the roster, position differs | current position → `o_x`/`o_y` | 🟨 `#fbbc04` |
 | On the roster, but MightPulse has no map position (inactive — not playing) | row moved below the active members | ⬜ `#b7b7b7` |
 
 Two kinds of columns:
@@ -182,15 +182,17 @@ Two kinds of columns:
   - `Rank` (or `Alliance_Rank`) — `R1`–`R4` / `Leader`; for someone who left, their rank in their new alliance (blank if none)
   - `TC_Level` (or `TC`) — town center level as shown in game: 1–34 as-is, then 5 levels per True Gold tier (35 = `TG1`, 36–39 = `TG1.1`–`TG1.4`, 40 = `TG2`, … 54 = `TG4.4`, 55 = `TG5`)
   - `Power` — a real number (formatted `#,##0` on new tabs), so it sorts correctly
-- **Recorded** — set when the row is added, then only changed by hand: `x`, `y` and `Current_Tag`. When the live value differs, it goes into `observed_x`/`observed_y`/`observed_tag`; when it matches again, those are cleared. The live tag is this alliance's tag while they're on its roster; otherwise their new tag, `none` (no alliance), or `left` (MightPulse hasn't caught up on where they went). Update the recorded value by hand once you've reviewed a change.
+- **Recorded** — set when the row is added, then only changed by hand: `x`, `y` and `Current_Tag`. When the live value differs, it goes into `o_x`/`o_y`/`o_tag`; when it matches again, those are cleared. The live tag is this alliance's tag while they're on its roster; otherwise their new tag, `none` (no alliance), or `left` (MightPulse hasn't caught up on where they went). Update the recorded value by hand once you've reviewed a change.
 
-Roster members missing from the tab are appended with Player ID, name, `Original_Name`, the live columns, `Current_Tag`, and `x`/`y` set to their current state, so they start 🟩 with empty `observed_*` columns.
+Roster members missing from the tab are appended with Player ID, name, `Original_Name`, the live columns, `Current_Tag`, and `x`/`y` set to their current state, so they start 🟩 with empty `o_*` columns.
 
-**Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Kingdom`, `Player ID`, `Original_Name`, `Current_Name`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `Growth %`, `vs Alliance`, `7d Growth %`, `x`, `y`, `observed_tag`, `observed_x`, `observed_y`, `notes` — bolded, frozen and filterable, with the whole tab in Arial 11 — then adds every member.
+**Tabs can start blank.** If a tab doesn't exist, the sync creates it (only after the MightPulse data is in, so a mistyped tag doesn't leave an empty tab); if it's empty, it writes a header row — `Kingdom`, `Player ID`, `Original_Name`, `Current_Name`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `Growth %`, `vs Alliance`, `7d Growth %`, `x`, `y`, `o_tag`, `o_x`, `o_y`, `notes` — bolded, frozen and filterable, with the whole tab in Arial 11 — then adds every member.
 
-**Status line.** Every sync writes a one-line summary into the header row, one blank column to the right of the last column: `📊 98/100 members · 🟩 90 matched · 🟨 3 new position · ⬜ 3 inactive · 🟪 2 left · synced Sep 30 09:12` (plus new / not found / without Player ID when there are any). The member count is a live formula over rows 2–101, so it stays right as you edit; the rest is what that sync found. The header row never moves when rows are sorted, so it stays put. If you add columns after `notes`, the next sync moves the status line past them.
+**Short column names.** The live-value columns are `o_tag`, `o_x` and `o_y` (KSHive's planned position: `p_x`, `p_y`). Tabs still using the old long names (`observed_tag`, `observed_x`, `observed_y`, `planned_x`, `planned_y`) keep working and are renamed in place by the next sync.
 
-The sync never writes into cells it has no value for, so it can't break a formula column you add. You can add your own columns after these; highlighting stops at `observed_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `observed_x`, `observed_y`, `observed_tag` and `notes`; `Kingdom`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `Growth %`, `vs Alliance` and `7d Growth %` are added to an existing tab automatically if it doesn't have them — each inserted where it sits on a new tab (e.g. the growth columns right after `Power`), so your own columns just shift right with their data intact. Alternative names (`Rank`/`Alliance_Rank`, `TC`/`TC_Level`) count as present, so nothing is duplicated; a dry run only reports what it would add (without `Current_Tag`, `observed_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
+**Status line.** Every sync writes a one-line summary into the header row, right after the last column: `📊 98/100 members · 🟩 90 matched · 🟨 3 new position · ⬜ 3 inactive · 🟪 2 left · synced Sep 30 09:12` (plus new / not found / without Player ID when there are any). The member count is a live formula over rows 2–101, so it stays right as you edit; the rest is what that sync found. The header row never moves when rows are sorted, so it stays put. If you add columns after `notes`, the next sync moves the status line past them.
+
+The sync never writes into cells it has no value for, so it can't break a formula column you add. You can add your own columns after these; highlighting stops at `o_y`, so they're never repainted. Existing tabs need `Player ID`, `Original_Name`, a name column (`Current_Name`, `Label/Name`, `Label` or `Name`), `x`, `y`, `o_x`, `o_y`, `o_tag` and `notes`; `Kingdom`, `Current_Tag`, `Rank`, `TC_Level`, `Power`, `Growth %`, `vs Alliance` and `7d Growth %` are added to an existing tab automatically if it doesn't have them — each inserted where it sits on a new tab (e.g. the growth columns right after `Power`), so your own columns just shift right with their data intact. Alternative names (`Rank`/`Alliance_Rank`, `TC`/`TC_Level`) count as present, so nothing is duplicated; a dry run only reports what it would add (without `Current_Tag`, `o_tag` is compared against the tab's alliance). Columns are found by header name, so order doesn't matter.
 
 **Legend tab.** A `Legend` tab, kept second (right after `Analytics`), explains each row color and which columns are live vs. recorded. It's rewritten with the Analytics tab from the same color settings the sync uses, so it always matches.
 
@@ -201,9 +203,9 @@ The sync never writes into cells it has no value for, so it can't break a formul
 
 Whole rows move, so hand-kept columns and notes go with them; rows without a Player ID end up between the two sections. New members are written directly under the last member (found by Player ID); if that slot already holds something, they're appended after the last filled row instead and moved into place. A tab that's already in order isn't touched.
 
-**Switching between tracked alliances.** MightPulse caches each alliance's roster separately (up to about an hour), so right after someone moves from one tracked alliance to another, both rosters can list them. Every sync — even of a single tab — fetches all tracked rosters first, and the most recently refreshed one wins: on the other tabs they show 🟪 with the new tag in `observed_tag` and aren't re-added, and Analytics counts them once.
+**Switching between tracked alliances.** MightPulse caches each alliance's roster separately (up to about an hour), so right after someone moves from one tracked alliance to another, both rosters can list them. Every sync — even of a single tab — fetches all tracked rosters first, and the most recently refreshed one wins: on the other tabs they show 🟪 with the new tag in `o_tag` and aren't re-added, and Analytics counts them once.
 
-**Layout.** Every sync also fits all columns to their contents (plus room for each header's filter button), centers `Current_Tag` and `observed_tag`, and left-aligns `Rank` and `TC_Level`, so existing tabs get the same layout as new ones.
+**Layout.** Every sync also fits all columns to their contents (plus room for each header's filter button), centers `Current_Tag` and `o_tag`, and left-aligns `Rank` and `TC_Level`, so existing tabs get the same layout as new ones.
 
 **Daily auto-sync.** Once a day (`SHEET_AUTO_SYNC_HOURS`, default 24; `0` = off) the bot runs a full `/sheet sync` of every tab plus Analytics on its own, through the same queue as the commands, and posts a one-line-per-tab summary (🟩 matched · 🟨 moved · 🟪 left · ➕ added) to the bot channel. It's checked hourly and timed from the last run, which is saved, so restarts don't cause extra runs; `/sheet list` shows when it last ran. It costs the same MightPulse requests as a manual full sync, about 1.1s per member.
 
