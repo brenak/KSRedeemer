@@ -14,8 +14,7 @@ from typing import Any, Dict, List, Tuple
 HEALTH_TAB = "Health History"
 HEALTH_HEADER = ["Date", "Alliance", "Members", "Active", "No growth", "Inactive"]
 HEALTH_DAYS = 365          # rows older than this are pruned
-# Chart data block on the Analytics tab (one row per date).
-SERIES_HEADER = ["Date", "Total players", "Active", "No growth", "Inactive"]
+PIE_HEADER = ["Status", "Players"]
 
 Counts = Tuple[int, int, int, int]   # members, active, no growth, inactive
 
@@ -59,6 +58,17 @@ def series(rows: List[List[Any]]) -> List[List[Any]]:
         totals = [sum(c[i] for c in latest.values()) for i in range(4)]
         out.append([day, *totals])
     return out
+
+
+def pie_block(series_rows: List[List[Any]]) -> Tuple[List[List[Any]], str]:
+    """(pie data -- header + Active / No growth / Inactive -- and its title
+    with the total) for the latest day in `series_rows`; ([], "") if there's
+    no history yet. Pure."""
+    if not series_rows:
+        return [], ""
+    day, total, active, stalled, inactive = series_rows[-1]
+    rows = [PIE_HEADER, ["Active", active], ["No growth", stalled], ["Inactive", inactive]]
+    return rows, f"Tracked alliances — {total:,} players ({day})"
 
 
 def _ws(sh, create: bool):

@@ -215,7 +215,6 @@ def _grid(sheet_id: int, col: int, rows: int) -> Dict[str, Any]:
 
 
 CHART_W, CHART_H, WIDE_W, WIDE_H, CHART_GAP = 560, 340, 1140, 380, 20
-HEALTH_TOTAL_COLOR = "434343"   # "Total players" line (dark gray 4)
 # The chart area's rows are pinned to this height so the row arithmetic
 # below is exact (Sheets doesn't reliably honor large pixel offsets --
 # a chart offset ~760px down landed ~170px short, on top of the one above).
@@ -261,7 +260,7 @@ def chart_layout(first_chart_row: int, col_widths: Dict[int, int]) -> Dict[str, 
         "tc": (row2, 0, 0),
         "growers": (row3, 0, 0),
         "health": (row4, 0, 0),
-        "end": (row4 + _rows_for(WIDE_H), 0, 0),
+        "end": (row4 + _rows_for(CHART_H), 0, 0),
     }
 
 
@@ -276,7 +275,7 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                    col_widths: Optional[Dict[int, int]] = None,
                    grower_series: Optional[List[int]] = None,
                    growers_title: str = "Top power gains since the checkpoint",
-                   health_rows: int = 0, health_col: int = 0) -> List[Dict[str, Any]]:
+                   health_rows: int = 0, health_col: int = 0, health_title: str = "") -> List[Dict[str, Any]]:
     """`grower_series`: main-table index of each alliance column in the
     hidden growers block (GROWERS_SERIES_COL on), in order -- drives each
     series' color so it matches the pie."""
@@ -347,27 +346,19 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
         requests.append({"addChart": {"chart": {"spec": growers_bar,
                                                 "position": _anchor(sheet_id, at["growers"], WIDE_W, WIDE_H)}}})
     if health_rows:
-        # Tracked-alliance health over time (hidden block at health_col:
-        # Date, Total players, Active, No growth, Inactive) -- colors match
-        # the alliance tabs' row colors.
-        line_colors = [HEALTH_TOTAL_COLOR, MATCH_COLOR, STALL_COLOR, INACTIVE_COLOR]
-        health_line = {
-            "title": "Tracked alliances — players over time",
-            "hiddenDimensionStrategy": "SHOW_ALL",
-            "basicChart": {
-                "chartType": "LINE",
-                "legendPosition": "BOTTOM_LEGEND",
-                "headerCount": 1,
-                "axis": [{"position": "BOTTOM_AXIS", "title": "Date"},
-                         {"position": "LEFT_AXIS", "title": "Players"}],
-                "domains": [{"domain": {"sourceRange": {"sources": [_grid(sheet_id, health_col, health_rows)]}}}],
-                "series": [{"series": {"sourceRange": {"sources": [_grid(sheet_id, health_col + 1 + i, health_rows)]}},
-                            "targetAxis": "LEFT_AXIS", "colorStyle": {"rgbColor": _hex_to_rgb_float(c)}}
-                           for i, c in enumerate(line_colors)],
+        # Tracked alliances right now: Active / No growth / Inactive (hidden
+        # block at health_col, header + one row each); the total is in the
+        # title. Pie slices take the theme colors -- the API can't set them.
+        health_pie = {
+            "title": health_title,
+            "pieChart": {
+                "legendPosition": "RIGHT_LEGEND",
+                # Pie ranges skip the header row (no headerCount on pies).
+                "domain": {"sourceRange": {"sources": [{**_grid(sheet_id, health_col, health_rows), "startRowIndex": 1}]}},
+                "series": {"sourceRange": {"sources": [{**_grid(sheet_id, health_col + 1, health_rows), "startRowIndex": 1}]}},
             },
         }
-        requests.append({"addChart": {"chart": {"spec": health_line,
-                                                "position": _anchor(sheet_id, at["health"], WIDE_W, WIDE_H)}}})
+        requests.append({"addChart": {"chart": {"spec": health_pie, "position": _anchor(sheet_id, at["health"])}}})
     return requests
 
 
@@ -476,10 +467,12 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     width = GROWERS_COL + len(GROWERS_HEADER)
     sh = open_spreadsheet()
     # Health-over-time block, hidden, right after the growers chart data.
-    health = health_history.series(health_history.load(sh))
+    # Tracked-alliance health pie: the latest day's totals, hidden block
+    # right after the growers chart data.
+    health, health_title = health_history.pie_block(health_history.series(health_history.load(sh)))
     health_col = GROWERS_SERIES_COL + (len(series_alliances) + 1 if series_alliances else 0)
     if health:
-        grid_width = health_col + len(health_history.SERIES_HEADER)
+        grid_width = health_col + len(health[0])
     else:
         grid_width = GROWERS_SERIES_COL + len(series_alliances) if series_alliances else width
     ws = _get_or_create(sh, ANALYTICS_TAB, index=0, rows=60, cols=grid_width)
@@ -499,7 +492,7 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
                   range_name=f"{_col_letter(GROWERS_COL)}1", raw=False)
         ws.update(values=series_rows, range_name=f"{_col_letter(GROWERS_SERIES_COL)}1", raw=False)
     if health:
-        ws.update(values=[health_history.SERIES_HEADER] + health, range_name=f"{_col_letter(health_col)}1", raw=True)
+        ws.update(values=health, range_name=f"{_col_letter(health_col)}1", raw=True)
 
     requests: List[Dict[str, Any]] = [
         # Reset the whole tab to Arial 11, then bold the header (same font).
@@ -597,7 +590,8 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
         requests += chart_requests(ws.id, rows, first_chart_row, growers=len(growers), col_widths=col_widths,
                                    grower_series=[index_of[a] for a in series_alliances],
                                    growers_title=growers_title,
-                                   health_rows=len(health), health_col=health_col)
+                                   health_rows=len(health) - 1 if health else 0, health_col=health_col,
+                                   health_title=health_title)
     if series_alliances or health:
         # Keep the chart-data blocks out of sight (the charts still read them).
         requests.append({"updateDimensionProperties": {
