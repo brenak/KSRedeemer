@@ -19,7 +19,7 @@ import aiohttp
 from config.config import MIGHTPULSE_API_KEY
 
 API_BASE = "https://api.mightpulse.com/v1"
-HTTP_TIMEOUT_SECONDS = 15
+HTTP_TIMEOUT_SECONDS = 30  # per request; MightPulse is sometimes slow, not down
 
 # 60 requests/minute limit -- keep a little headroom.
 MIN_REQUEST_INTERVAL_SECONDS = 1.1
@@ -71,7 +71,8 @@ class MightPulseClient:
     async def _get_json(self, path: str, **params: object) -> Optional[Dict[str, Any]]:
         """GET a MightPulse endpoint. Returns None on 404 (unknown player /
         alliance), raises MightPulseRateLimited if still 429 after one retry,
-        MightPulseError for anything else that isn't a 2xx."""
+        MightPulseError for anything else that isn't a 2xx -- including a
+        timeout or dropped connection that's still failing after one retry."""
         if not self.configured():
             raise MightPulseError("MIGHTPULSE_API_KEY not configured")
 
@@ -88,26 +89,40 @@ class MightPulseClient:
                     await asyncio.sleep(wait)
                 self._last_request_at = time.monotonic()
 
-                async with session.get(url, params=query) as resp:
-                    if resp.status == 429:
-                        backoff = _retry_after_seconds(resp)
-                        if attempt == 0 and backoff is not None:
-                            print(f"🚦 MightPulse rate limited on {path} — retrying in {backoff:.0f}s")
-                            await asyncio.sleep(backoff)
-                            continue
-                        raise MightPulseRateLimited("MightPulse rate limit reached (HTTP 429)")
+                try:
+                    async with session.get(url, params=query) as resp:
+                        if resp.status == 429:
+                            backoff = _retry_after_seconds(resp)
+                            if attempt == 0 and backoff is not None:
+                                print(f"🚦 MightPulse rate limited on {path} — retrying in {backoff:.0f}s")
+                                await asyncio.sleep(backoff)
+                                continue
+                            raise MightPulseRateLimited("MightPulse rate limit reached (HTTP 429)")
 
-                    if resp.status == 404:
-                        return None
-                    if resp.status == 401:
-                        raise MightPulseError("MightPulse rejected the API key (HTTP 401)")
-                    if not resp.ok:
-                        raise MightPulseError(f"MightPulse API error: HTTP {resp.status}")
+                        if resp.status == 404:
+                            return None
+                        if resp.status == 401:
+                            raise MightPulseError("MightPulse rejected the API key (HTTP 401)")
+                        if not resp.ok:
+                            raise MightPulseError(f"MightPulse API error: HTTP {resp.status}")
 
-                    data = await resp.json(content_type=None)
-                    if not isinstance(data, dict):
-                        raise MightPulseError("MightPulse returned an unexpected response")
-                    return data
+                        data = await resp.json(content_type=None)
+                        if not isinstance(data, dict):
+                            raise MightPulseError("MightPulse returned an unexpected response")
+                        return data
+                except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                    # A timeout has no message at all -- it used to surface as
+                    # a bare "error: " with nothing after it. Retry once, then
+                    # report it like any other MightPulse failure.
+                    if isinstance(exc, asyncio.TimeoutError):
+                        what = f"didn't answer within {HTTP_TIMEOUT_SECONDS}s"
+                    else:
+                        what = f"connection failed ({type(exc).__name__}{': ' + str(exc) if str(exc) else ''})"
+                    if attempt == 0:
+                        print(f"⚠️ MightPulse {what} on {path} — retrying once")
+                        await asyncio.sleep(2)
+                        continue
+                    raise MightPulseError(f"MightPulse {what}") from exc
 
         raise MightPulseRateLimited("MightPulse rate limit reached (HTTP 429)")
 

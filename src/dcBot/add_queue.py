@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 
 
 class AddQueue:
@@ -23,7 +24,9 @@ class AddQueue:
             try:
                 await coro
             except Exception as e:
-                print(f"❌ AddQueue worker error: {e}")
+                # Type + traceback: some errors (timeouts) have no message at all.
+                print(f"❌ AddQueue worker error: {type(e).__name__}: {e}")
+                traceback.print_exc()
             finally:
                 self._processing = False
                 self._queue.task_done()

@@ -7,6 +7,7 @@ with /sheet add / remove / list.
 """
 
 import asyncio
+import traceback
 
 import discord
 from discord import app_commands
@@ -89,8 +90,14 @@ async def run_analytics(
         print(f"❌ Analytics: {e}")
         return f"❌ Analytics: {e}"
     except Exception as e:
-        print(f"Error updating analytics: {e}")
-        return f"❌ Analytics: {str(e)}"
+        print(f"Error updating analytics: {_reason(e)}")
+        traceback.print_exc()
+        return f"❌ Analytics: {_reason(e)}"
+
+
+def _reason(e: BaseException) -> str:
+    """An exception as text -- its type when it has no message (timeouts)."""
+    return str(e) or type(e).__name__
 
 
 async def run_sheet_sync(
@@ -111,9 +118,15 @@ async def run_sheet_sync(
     # Every tracked roster up front -- even for a one-tab sync -- so someone
     # who switched between two tracked alliances isn't left active on the
     # old tab while its cached roster still lists them.
-    await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
-    # Today's power snapshot (real runs only) + growth baselines.
-    power_ctx = await load_power(bot_data, roster_cache, record=not dry_run)
+    try:
+        await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
+        # Today's power snapshot (real runs only) + growth baselines.
+        power_ctx = await load_power(bot_data, roster_cache, record=not dry_run)
+    except Exception as e:
+        print(f"❌ Sheet sync failed before any tab was written: {_reason(e)}")
+        traceback.print_exc()
+        await send(f"❌ Sheet sync failed before any tab was written: {_reason(e)}. Try again in a few minutes.")
+        return
     for t in targets:
         try:
             result = await sync_alliance_sheet(
@@ -133,8 +146,9 @@ async def run_sheet_sync(
             message = f"❌ {_describe(t)}: {e}"
             print(f"❌ Sheet sync {t['tab']}: {e}")
         except Exception as e:
-            message = f"❌ {_describe(t)}: {str(e)}"
-            print(f"Error in sheet sync ({t['tab']}): {e}")
+            message = f"❌ {_describe(t)}: {_reason(e)}"
+            print(f"Error in sheet sync ({t['tab']}): {_reason(e)}")
+            traceback.print_exc()
         if compact:
             lines.append(message)
             continue
