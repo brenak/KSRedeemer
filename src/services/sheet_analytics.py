@@ -354,6 +354,9 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
         # title. Pie slices take the theme colors -- the API can't set them.
         health_pie = {
             "title": health_title,
+            # Its data block is hidden; plot it anyway (without this Sheets
+            # leaves it out and shows "Data in hidden columns is excluded").
+            "hiddenDimensionStrategy": "SHOW_ALL",
             "pieChart": {
                 "legendPosition": "RIGHT_LEGEND",
                 # Pie ranges skip the header row (no headerCount on pies).
