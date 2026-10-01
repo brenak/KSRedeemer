@@ -68,7 +68,7 @@ def pie_block(series_rows: List[List[Any]]) -> Tuple[List[List[Any]], str]:
         return [], ""
     day, total, active, stalled, inactive = series_rows[-1]
     rows = [PIE_HEADER, ["Active", active], ["No growth", stalled], ["Inactive", inactive]]
-    return rows, f"Tracked alliances — {total:,} players ({day})"
+    return rows, f"Activity - {total:,} players ({day})"
 
 
 def _ws(sh, create: bool):

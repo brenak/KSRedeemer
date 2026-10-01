@@ -214,7 +214,9 @@ def _grid(sheet_id: int, col: int, rows: int) -> Dict[str, Any]:
             "startColumnIndex": col, "endColumnIndex": col + 1}
 
 
-CHART_W, CHART_H, WIDE_W, WIDE_H, CHART_GAP = 560, 340, 1140, 380, 20
+# Three charts across the top row; the wide ones below span the same width.
+CHART_W, CHART_H, CHART_GAP = 420, 320, 20
+WIDE_W, WIDE_H = 3 * CHART_W + 2 * CHART_GAP, 380
 # The chart area's rows are pinned to this height so the row arithmetic
 # below is exact (Sheets doesn't reliably honor large pixel offsets --
 # a chart offset ~760px down landed ~170px short, on top of the one above).
@@ -242,25 +244,26 @@ def _rows_for(px: int) -> int:
 
 def chart_layout(first_chart_row: int, col_widths: Dict[int, int]) -> Dict[str, Tuple[int, int, int]]:
     """(anchor row, anchor column, x offset within that column) per chart.
-    Rows: pie | power, then TC stacked, then growers -- each group anchored
-    to its own row. The power chart is anchored to the column where
-    CHART_W + gap falls (column widths are set explicitly, so they're
-    known), leaving only a small in-column offset."""
-    target_x = CHART_W + CHART_GAP
-    col, left = 0, 0
-    while left + col_widths.get(col, DEFAULT_COL_PX) <= target_x:
-        left += col_widths.get(col, DEFAULT_COL_PX)
-        col += 1
+    Rows: TG5 pie | power | activity pie, then TC stacked, then growers --
+    each row anchored on its own. The 2nd and 3rd charts are anchored to
+    the column where their x position falls (column widths are set
+    explicitly, so they're known), leaving only a small in-column offset."""
+    def at_x(target_x: int) -> Tuple[int, int]:
+        col, left = 0, 0
+        while left + col_widths.get(col, DEFAULT_COL_PX) <= target_x:
+            left += col_widths.get(col, DEFAULT_COL_PX)
+            col += 1
+        return col, target_x - left
+
     row2 = first_chart_row + _rows_for(CHART_H)
     row3 = row2 + _rows_for(WIDE_H)
-    row4 = row3 + _rows_for(WIDE_H)
     return {
         "pie": (first_chart_row, 0, 0),
-        "power": (first_chart_row, col, target_x - left),
+        "power": (first_chart_row, *at_x(CHART_W + CHART_GAP)),
+        "health": (first_chart_row, *at_x(2 * (CHART_W + CHART_GAP))),
         "tc": (row2, 0, 0),
         "growers": (row3, 0, 0),
-        "health": (row4, 0, 0),
-        "end": (row4 + _rows_for(CHART_H), 0, 0),
+        "end": (row3 + _rows_for(WIDE_H), 0, 0),
     }
 
 
