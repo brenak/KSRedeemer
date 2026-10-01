@@ -22,6 +22,7 @@ from services.power_growth import PowerContext, prepare_power, take_checkpoint, 
 from services import health_history
 from services.mightpulse_map_update import update_maps
 from services.sheet_sync import (
+    sheet_link,
     SheetSyncError,
     configured,
     open_spreadsheet,
@@ -148,12 +149,12 @@ async def run_sheet_sync(
                 health[t["tab"]] = health_history.counts_from_result(result)
             print(f"📋 Sheet sync {t['tab']}{' (dry run)' if dry_run else ''}: {result.compact_summary()}")
             if compact:
-                lines.append(f"✅ `{t['tab']}` — {result.compact_summary()}")
+                lines.append(f"✅ {sheet_link(t['tab'], result.tab_gid)} — {result.compact_summary()}")
                 continue
             header = (
                 f"📋 **[dry run — nothing written] {_describe(t)}**"
                 if dry_run else f"📋 **Synced {_describe(t)}**"
-            )
+            ) + (f" · {sheet_link('open tab', result.tab_gid)}" if result.tab_gid is not None else "")
             message = "\n".join([header] + result.summary_lines())
         except SheetSyncError as e:
             message = f"❌ {_describe(t)}: {e}"
@@ -246,7 +247,8 @@ def register_sheet_commands(
             f"📋 {'Dry run of ' if dry_run else ''}sheet sync started for {tabs}{queued}. "
             f"One MightPulse lookup per member (~{SECONDS_PER_LOOKUP:.0f}s each), "
             f"so expect a couple of minutes per tab"
-            f"{'' if dry_run else ' (plus up to 10 min first if MightPulse has a map update available)'}."
+            f"{'' if dry_run else ' (plus up to 10 min first if MightPulse has a map update available)'}.\n"
+            f"📄 {sheet_link('Open the roster sheet')}"
         )
 
         async def do_sync():
@@ -395,6 +397,7 @@ def register_sheet_commands(
                   else "No checkpoint yet — growth counts from the first snapshot; run /sheet checkpoint after KvK")
         await interaction.response.send_message(
             "📋 **Sheet sync targets**\n" + "\n".join(f"• {_describe(t)}" for t in targets)
+            + f"\n📄 {sheet_link('Open the roster sheet')}"
             + f"\n-# {auto}\n-# {growth}"
         )
 

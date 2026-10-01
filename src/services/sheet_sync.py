@@ -160,6 +160,7 @@ class SyncResult:
     new_member_nicks: List[str] = field(default_factory=list)
     columns_added: List[str] = field(default_factory=list)   # optional columns inserted into an existing tab
     headers_renamed: List[str] = field(default_factory=list)  # "observed_x → o_x" -- long names shortened
+    tab_gid: Optional[int] = None     # the tab's sheet id, for a link straight to it
     flagged_nicks: List[str] = field(default_factory=list)   # growing much faster than the alliance
     # "created" (tab didn't exist) / "initialized" (tab was blank) / ""
     tab_setup: str = ""
@@ -741,6 +742,18 @@ def superseded_members(
     return result
 
 
+def sheet_url(gid: Optional[int] = None) -> str:
+    """The roster spreadsheet, or one tab of it (gid = the tab's sheet id)."""
+    base = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
+    return f"{base}#gid={gid}" if gid is not None else base
+
+
+def sheet_link(text: str, gid: Optional[int] = None) -> str:
+    """A Discord link to the sheet / a tab; the <> keeps Discord from adding
+    a preview card under the message."""
+    return f"[{text}](<{sheet_url(gid)}>)"
+
+
 def configured() -> bool:
     return bool(GOOGLE_SHEETS_CREDENTIALS_PATH and GOOGLE_SHEET_ID)
 
@@ -1141,4 +1154,6 @@ async def sync_alliance_sheet(
         await asyncio.to_thread(
             _write_plan, ws, plan, header, fresh, pid_idx, _player_id_column(all_values, pid_idx), status_col
         )
+    if ws is not None:
+        plan.result.tab_gid = ws.id
     return plan.result

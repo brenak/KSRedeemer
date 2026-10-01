@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.mightpulse_client import MightPulseClient, MightPulseError, MightPulseRateLimited
 from services.sheet_sync import (
+    sheet_link,
     INACTIVE_COLOR,
     MATCH_COLOR,
     MISMATCH_COLOR,
@@ -611,6 +612,7 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     ws.update(values=footer, range_name=f"A{rows + 3}", raw=False)
     # Legend goes second, after Analytics has claimed index 0.
     write_legend(sh)
+    return ws.id
 
 
 async def update_analytics(
@@ -683,8 +685,9 @@ async def update_analytics(
             growth_note = (f"Growth since tracking began ({since}) — "
                            f"run /sheet checkpoint right after KvK to measure from there")
             growers_title = f"Top power gains since tracking began ({since})"
-    await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note, growers_title)
-    summary = f"📊 `{ANALYTICS_TAB}` tab updated {now_local().strftime('%H:%M %Z')} — {len(stats)} alliance(s)"
+    gid = await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note, growers_title)
+    summary = (f"📊 {sheet_link(ANALYTICS_TAB + ' tab', gid)} updated {now_local().strftime('%H:%M %Z')}"
+               f" — {len(stats)} alliance(s)")
     if below_min:
         summary += f", {below_min} under {MIN_TOTAL_POWER / 1e9:g}B power not shown"
     if len(notes) > below_min:
