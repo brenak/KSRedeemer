@@ -7,6 +7,7 @@ with /sheet add / remove / list.
 """
 
 import asyncio
+from datetime import datetime
 import traceback
 
 import discord
@@ -388,8 +389,19 @@ def register_sheet_commands(
             return
         if SHEET_AUTO_SYNC_HOURS > 0:
             last = bot_data.get("botConfig", {}).get("last_sheet_auto_sync")
-            auto = (f"Auto-sync every {SHEET_AUTO_SYNC_HOURS}h · last run "
-                    + (f"`{last[:16].replace('T', ' ')}`" if last else "not yet"))
+            # Discord timestamps show in each viewer's own time zone (the
+            # stored value is the bot server's clock -- UTC in Docker).
+            try:
+                last_txt = f"<t:{int(datetime.fromisoformat(last).timestamp())}:f>" if last else "not yet"
+            except ValueError:
+                last_txt = f"`{last}`"
+            auto = f"Auto-sync every {SHEET_AUTO_SYNC_HOURS}h · last run {last_txt}"
+            # Discord renders <t:...> in each viewer's own time zone.
+            manager = getattr(interaction.client, "sheet_auto_sync", None)
+            nxt = manager.next_run() if manager else None
+            if nxt:
+                ts = int(nxt.timestamp())
+                auto += f" · next <t:{ts}:R> (<t:{ts}:f>)"
         else:
             auto = "Auto-sync is off (SHEET_AUTO_SYNC_HOURS=0)"
         checkpoint = (bot_data.get("power_checkpoint") or {}).get("at")

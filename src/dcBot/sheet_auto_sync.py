@@ -9,7 +9,7 @@ short and the run slips an hour every day.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 import discord
 from discord.ext import tasks
@@ -20,6 +20,20 @@ from services.mightpulse_client import MightPulseClient
 from services.sheet_sync import configured
 
 DUE_SLACK = timedelta(minutes=10)
+
+
+def next_tick_after(tick: datetime, last: Optional[str]) -> datetime:
+    """First hourly check (tick, tick + 1h, ...) at which a sync is due.
+    Pure -- tested offline."""
+    if not last:
+        return tick
+    try:
+        due = datetime.fromisoformat(last) + timedelta(hours=SHEET_AUTO_SYNC_HOURS) - DUE_SLACK
+    except (TypeError, ValueError):
+        return tick
+    while tick < due:
+        tick += timedelta(hours=1)
+    return tick
 
 
 class SheetAutoSyncManager:
@@ -49,6 +63,17 @@ class SheetAutoSyncManager:
             return True
         return elapsed >= timedelta(hours=SHEET_AUTO_SYNC_HOURS) - DUE_SLACK
 
+    def next_run(self) -> Optional[datetime]:
+        """When the next auto-sync will start: the first hourly check at or
+        after last run + SHEET_AUTO_SYNC_HOURS (minus the slack). None when
+        auto-sync is off or not running."""
+        if SHEET_AUTO_SYNC_HOURS <= 0 or not self.auto_sync.is_running():
+            return None
+        tick = self.auto_sync.next_iteration
+        if tick is None:
+            return None
+        return next_tick_after(tick, self.bot_data.get("botConfig", {}).get("last_sheet_auto_sync"))
+
     @tasks.loop(hours=1)
     async def auto_sync(self):
         if not configured() or not self.mightpulse_client.configured():
@@ -70,7 +95,9 @@ class SheetAutoSyncManager:
             print(f"📋 Daily sheet sync: {len(targets)} tab(s)")
 
             async def send(message: str):
-                await self._notify("📋 **Daily sheet sync**\n" + message)
+                nxt = self.next_run()
+                when = f"\n-# Next auto-sync <t:{int(nxt.timestamp())}:R>" if nxt else ""
+                await self._notify("📋 **Daily sheet sync**\n" + message + when)
 
             await run_sheet_sync(self.bot_data, self.mightpulse_client, targets, False, send, compact=True)
         except Exception as e:
