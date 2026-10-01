@@ -19,6 +19,7 @@ from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
 from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analytics
 from services.power_growth import PowerContext, prepare_power, take_checkpoint
+from services.mightpulse_map_update import update_maps
 from services.sheet_sync import (
     SheetSyncError,
     configured,
@@ -118,6 +119,14 @@ async def run_sheet_sync(
     # Every tracked roster up front -- even for a one-tab sync -- so someone
     # who switched between two tracked alliances isn't left active on the
     # old tab while its cached roster still lists them.
+    # Fresh positions first: press MightPulse's "Update Map" for each synced
+    # kingdom when it's off cooldown (skipped otherwise; never on dry runs).
+    if not dry_run:
+        for line in await update_maps([t["kid"] for t in targets]):
+            if compact:
+                lines.append(line)
+            else:
+                await send(line)
     try:
         await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
         # Today's power snapshot (real runs only) + growth baselines.
@@ -227,7 +236,8 @@ def register_sheet_commands(
         await send_followup(interaction,
             f"📋 {'Dry run of ' if dry_run else ''}sheet sync started for {tabs}{queued}. "
             f"One MightPulse lookup per member (~{SECONDS_PER_LOOKUP:.0f}s each), "
-            f"so expect a couple of minutes per tab."
+            f"so expect a couple of minutes per tab"
+            f"{'' if dry_run else ' (plus up to 10 min first if MightPulse has a map update available)'}."
         )
 
         async def do_sync():
