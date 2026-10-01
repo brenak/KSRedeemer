@@ -5,7 +5,7 @@ import re
 import discord
 from discord.ext import tasks
 from datetime import datetime
-from typing import Dict, Any, Callable, List, Optional
+from typing import Dict, Any, Callable, List, Optional, Tuple
 
 from giftcode_api.redeem import redeem_giftcode_for_all_players
 from config.config import GIFT_CODE_CHECK_INTERVAL_HOURS
@@ -214,32 +214,43 @@ class GiftCodeCacheManager:
                     if players:
                         print(f"🎁 Found {len(new_codes)} new code(s). Auto-redeeming for {len(players)} player(s)...")
                         redeemed_codes = self.bot_data.setdefault("redeemed_codes", {})
+                        # code -> (players who got it, why the run stopped early or "")
+                        outcomes: Dict[str, Tuple[int, str]] = {}
 
                         for code in new_codes:
                             await asyncio.sleep(random.uniform(5, 10))
                             result = await redeem_giftcode_for_all_players(players, code)
 
                             code_list = redeemed_codes.setdefault(code, [])
+                            got_it, stopped = 0, ""
                             for item in result or []:
                                 error_code = item.get("errorCode", "")
 
                                 if error_code == "EXPIRED":
                                     cache[code]["status"] = "invalid"
                                     cache[code]["manually_expired"] = True
-                                    print(f"⏰ Gift code [{code}] reported expired by game — marked invalid.")
+                                    # "has expired" or "has reached its claim limit"
+                                    stopped = item.get("message") or "Gift code has expired."
+                                    print(f"⏰ Gift code [{code}] reported expired by game — marked invalid. ({stopped})")
                                     break
 
                                 if error_code == "INVALID_CODE":
+                                    stopped = "Gift code not recognized by the game."
                                     break
 
                                 if error_code == "RATE_LIMITED":
+                                    stopped = "Rate limited — the rest will be picked up on the next check/catchup."
                                     print(f"🚦 Gift code [{code}] auto-redeem rate limited — remaining players will be picked up on the next check/catchup.")
                                     break
 
                                 if item.get("success"):
+                                    got_it += 1
                                     player_id = item.get("player_id")
                                     if player_id and player_id not in code_list:
                                         code_list.append(player_id)
+                            outcomes[code] = (got_it, stopped)
+                            print(f"🎁 [{code}] redeemed for {got_it}/{len(players)} player(s)"
+                                  + (f" — stopped: {stopped}" if stopped else ""))
 
                             # Save after each code so a crash mid-loop doesn't lose progress
                             self.save_data(self.bot_data)
@@ -250,18 +261,32 @@ class GiftCodeCacheManager:
                             self.bot_data, sync_report.added, self.save_data
                         )
 
-                        # Send Discord notification
+                        # Send Discord notification -- only for codes at least
+                        # one player actually got. A code nobody could redeem
+                        # (claim limit already reached, expired) isn't
+                        # announced: people shared those outside the bot and
+                        # they didn't work.
+                        announce = [c for c in new_codes if outcomes.get(c, (0, ""))[0] > 0]
+                        if not announce:
+                            print(f"🔕 Not announcing {', '.join(new_codes)}: no player could redeem "
+                                  f"{'it' if len(new_codes) == 1 else 'them'}.")
                         try:
                             config = self.bot_data.get("botConfig", {})
                             channel_id = config.get("allowed_channel")
-                            if channel_id:
+                            if channel_id and announce:
                                 channel = self.bot.get_channel(channel_id)
                                 if channel:
-                                    codes_str = ", ".join([f"`{c}`" for c in new_codes])
+                                    lines = []
+                                    for c in announce:
+                                        got_it, stopped = outcomes[c]
+                                        line = (f"`{c}` — redeemed for {got_it}/{len(players)} "
+                                                f"player{'s' if len(players) > 1 else ''}")
+                                        if stopped:
+                                            line += f" ({stopped.rstrip('.')})"
+                                        lines.append(line)
                                     message = (
-                                        f"🎁 **New Gift Code{'s' if len(new_codes) > 1 else ''}!**\n"
-                                        f"{codes_str}\n"
-                                        f"Auto-redeemed for {len(players)} player{'s' if len(players) > 1 else ''}."
+                                        f"🎁 **New Gift Code{'s' if len(announce) > 1 else ''}!**\n"
+                                        + "\n".join(lines)
                                     )
                                     extra = sync_report.summary_lines() + onboard_lines
                                     if extra:
