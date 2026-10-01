@@ -18,7 +18,8 @@ from dcBot.interaction_reply import send_followup
 from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
 from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analytics
-from services.power_growth import PowerContext, prepare_power, take_checkpoint
+from services.power_growth import PowerContext, prepare_power, take_checkpoint, today_str
+from services import health_history
 from services.mightpulse_map_update import update_maps
 from services.sheet_sync import (
     SheetSyncError,
@@ -136,12 +137,15 @@ async def run_sheet_sync(
         traceback.print_exc()
         await send(f"❌ Sheet sync failed before any tab was written: {_reason(e)}. Try again in a few minutes.")
         return
+    health: Dict[str, Any] = {}   # tab -> counts, for the health chart
     for t in targets:
         try:
             result = await sync_alliance_sheet(
                 client, t["kid"], t["tag"], t["tab"],
                 dry_run=dry_run, player_cache=player_cache, roster_cache=roster_cache, power_ctx=power_ctx,
             )
+            if not dry_run:
+                health[t["tab"]] = health_history.counts_from_result(result)
             print(f"📋 Sheet sync {t['tab']}{' (dry run)' if dry_run else ''}: {result.compact_summary()}")
             if compact:
                 lines.append(f"✅ `{t['tab']}` — {result.compact_summary()}")
@@ -167,6 +171,11 @@ async def run_sheet_sync(
 
     # Analytics covers every target, not just the ones synced now; rosters
     # fetched above are reused, the rest cost one call each.
+    if health:
+        try:
+            await asyncio.to_thread(lambda: health_history.record(open_spreadsheet(), today_str(), health))
+        except Exception as e:
+            print(f"⚠️ Health history not recorded: {_reason(e)}")
     if not dry_run:
         analytics = await run_analytics(bot_data, client, roster_cache, power_ctx)
         if compact:

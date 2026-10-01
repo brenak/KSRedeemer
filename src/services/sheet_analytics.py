@@ -30,7 +30,10 @@ from services.sheet_sync import (
     superseded_members,
     _col_letter,
 )
+from services import health_history
 from services.power_growth import (
+    STALL_COLOR,
+    STALL_DAYS,
     FLAG_COLOR,
     FLAG_MIN_GAIN,
     FLAG_MULTIPLE,
@@ -43,7 +46,7 @@ from services.power_growth import (
 
 ANALYTICS_TAB = "Analytics"
 LEGEND_TAB = "Legend"
-RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB, HISTORY_TAB)
+RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB, HISTORY_TAB, health_history.HEALTH_TAB)
 
 # Legend rows are built from the same color constants the sync paints with,
 # so the key can't drift from what's on the alliance tabs.
@@ -57,6 +60,10 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
      "alliance), or \"left\" (MightPulse hasn't caught up yet). Moved below the 100 member slots "
      "(row 102 on).",
      "Follow up, or remove the row."),
+    (STALL_COLOR, "No growth (trending inactive)",
+     f"On the roster with a map position, but no power gained over the last {STALL_DAYS} days (from the daily "
+     "Power History). Active players gain something every day. Moved below the active members.",
+     "Check in — they may be drifting away."),
     (INACTIVE_COLOR, "Inactive",
      "On the roster, but MightPulse has no map position for them — they haven't been playing. "
      "These rows are kept at the end of the member list.",
@@ -208,6 +215,7 @@ def _grid(sheet_id: int, col: int, rows: int) -> Dict[str, Any]:
 
 
 CHART_W, CHART_H, WIDE_W, WIDE_H, CHART_GAP = 560, 340, 1140, 380, 20
+HEALTH_TOTAL_COLOR = "434343"   # "Total players" line (dark gray 4)
 # The chart area's rows are pinned to this height so the row arithmetic
 # below is exact (Sheets doesn't reliably honor large pixel offsets --
 # a chart offset ~760px down landed ~170px short, on top of the one above).
@@ -246,12 +254,14 @@ def chart_layout(first_chart_row: int, col_widths: Dict[int, int]) -> Dict[str, 
         col += 1
     row2 = first_chart_row + _rows_for(CHART_H)
     row3 = row2 + _rows_for(WIDE_H)
+    row4 = row3 + _rows_for(WIDE_H)
     return {
         "pie": (first_chart_row, 0, 0),
         "power": (first_chart_row, col, target_x - left),
         "tc": (row2, 0, 0),
         "growers": (row3, 0, 0),
-        "end": (row3 + _rows_for(WIDE_H), 0, 0),
+        "health": (row4, 0, 0),
+        "end": (row4 + _rows_for(WIDE_H), 0, 0),
     }
 
 
@@ -265,7 +275,8 @@ def _anchor(sheet_id: int, spot: Tuple[int, int, int], width: int = CHART_W, hei
 def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int = 0,
                    col_widths: Optional[Dict[int, int]] = None,
                    grower_series: Optional[List[int]] = None,
-                   growers_title: str = "Top power gains since the checkpoint") -> List[Dict[str, Any]]:
+                   growers_title: str = "Top power gains since the checkpoint",
+                   health_rows: int = 0, health_col: int = 0) -> List[Dict[str, Any]]:
     """`grower_series`: main-table index of each alliance column in the
     hidden growers block (GROWERS_SERIES_COL on), in order -- drives each
     series' color so it matches the pie."""
@@ -335,6 +346,28 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
         }
         requests.append({"addChart": {"chart": {"spec": growers_bar,
                                                 "position": _anchor(sheet_id, at["growers"], WIDE_W, WIDE_H)}}})
+    if health_rows:
+        # Tracked-alliance health over time (hidden block at health_col:
+        # Date, Total players, Active, No growth, Inactive) -- colors match
+        # the alliance tabs' row colors.
+        line_colors = [HEALTH_TOTAL_COLOR, MATCH_COLOR, STALL_COLOR, INACTIVE_COLOR]
+        health_line = {
+            "title": "Tracked alliances — players over time",
+            "hiddenDimensionStrategy": "SHOW_ALL",
+            "basicChart": {
+                "chartType": "LINE",
+                "legendPosition": "BOTTOM_LEGEND",
+                "headerCount": 1,
+                "axis": [{"position": "BOTTOM_AXIS", "title": "Date"},
+                         {"position": "LEFT_AXIS", "title": "Players"}],
+                "domains": [{"domain": {"sourceRange": {"sources": [_grid(sheet_id, health_col, health_rows)]}}}],
+                "series": [{"series": {"sourceRange": {"sources": [_grid(sheet_id, health_col + 1 + i, health_rows)]}},
+                            "targetAxis": "LEFT_AXIS", "colorStyle": {"rgbColor": _hex_to_rgb_float(c)}}
+                           for i, c in enumerate(line_colors)],
+            },
+        }
+        requests.append({"addChart": {"chart": {"spec": health_line,
+                                                "position": _anchor(sheet_id, at["health"], WIDE_W, WIDE_H)}}})
     return requests
 
 
@@ -441,8 +474,14 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     growers = growers or []
     series_alliances, series_rows = growers_series_block(growers, [st.label for st in stats])
     width = GROWERS_COL + len(GROWERS_HEADER)
-    grid_width = GROWERS_SERIES_COL + len(series_alliances) if series_alliances else width
     sh = open_spreadsheet()
+    # Health-over-time block, hidden, right after the growers chart data.
+    health = health_history.series(health_history.load(sh))
+    health_col = GROWERS_SERIES_COL + (len(series_alliances) + 1 if series_alliances else 0)
+    if health:
+        grid_width = health_col + len(health_history.SERIES_HEADER)
+    else:
+        grid_width = GROWERS_SERIES_COL + len(series_alliances) if series_alliances else width
     ws = _get_or_create(sh, ANALYTICS_TAB, index=0, rows=60, cols=grid_width)
     if ws.col_count < grid_width:
         ws.add_cols(grid_width - ws.col_count)
@@ -459,6 +498,8 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
         ws.update(values=[GROWERS_HEADER] + [g.row() for g in growers],
                   range_name=f"{_col_letter(GROWERS_COL)}1", raw=False)
         ws.update(values=series_rows, range_name=f"{_col_letter(GROWERS_SERIES_COL)}1", raw=False)
+    if health:
+        ws.update(values=[health_history.SERIES_HEADER] + health, range_name=f"{_col_letter(health_col)}1", raw=True)
 
     requests: List[Dict[str, Any]] = [
         # Reset the whole tab to Arial 11, then bold the header (same font).
@@ -555,9 +596,10 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
         index_of = {st.label: i for i, st in enumerate(stats)}
         requests += chart_requests(ws.id, rows, first_chart_row, growers=len(growers), col_widths=col_widths,
                                    grower_series=[index_of[a] for a in series_alliances],
-                                   growers_title=growers_title)
-    if series_alliances:
-        # Keep the chart-data block out of sight (the chart still reads it).
+                                   growers_title=growers_title,
+                                   health_rows=len(health), health_col=health_col)
+    if series_alliances or health:
+        # Keep the chart-data blocks out of sight (the charts still read them).
         requests.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS",
                       "startIndex": GROWERS_SERIES_COL, "endIndex": grid_width},

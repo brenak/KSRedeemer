@@ -37,6 +37,18 @@ MEDIAN_FLOOR = 0.01        # median growth treated as at least 1%, so a flat
                            # alliance doesn't turn every small gain into an outlier
 FLAG_COLOR = "e06666"      # Google Sheets "light red 1"
 
+# Trending inactive: no power gained over the last STALL_DAYS days (today's
+# power no higher than the newest snapshot at least that old). Active
+# players gain *something* every day; a drop counts too (troops lost while
+# offline). Needs a snapshot that old, so new players are never flagged.
+STALL_DAYS = 3
+STALL_COLOR = "9fc5e8"     # Google Sheets "light blue 2"
+# ...but only where MightPulse actually refreshed: if under this share of a
+# kingdom's tracked members changed power over the window, its data is
+# stale (no map update in days -- every power looks flat) and nobody there
+# is flagged. Live data changes for most members (~60%+ seen).
+STALL_MIN_CHANGED = 0.25
+
 
 def tz() -> ZoneInfo:
     try:
@@ -62,6 +74,8 @@ class PowerContext:
     today: str
     baselines: Dict[int, int] = field(default_factory=dict)   # fid -> baseline power
     week_ago: Dict[int, int] = field(default_factory=dict)    # fid -> power >= 7 days ago
+    stall_ago: Dict[int, int] = field(default_factory=dict)   # fid -> power >= STALL_DAYS days ago
+    stall_stale: set = field(default_factory=set)             # fids in kingdoms whose data didn't refresh
     checkpoint_label: Optional[str] = None                     # when the checkpoint was taken
     first_snapshot: Optional[str] = None                       # earliest date on record
     recorded: Optional[int] = None                             # rows added this run (None = read-only)
@@ -77,6 +91,7 @@ class Growth:
     vs_alliance: Optional[float]      # multiple of the alliance median
     week_pct: Optional[float]
     flagged: bool
+    stalled: bool = False             # no power gained over STALL_DAYS days
 
 
 def build_context(history: Iterable[List[str]], checkpoint: Optional[Dict[str, Any]], today: str) -> PowerContext:
@@ -88,6 +103,7 @@ def build_context(history: Iterable[List[str]], checkpoint: Optional[Dict[str, A
     if checkpoint:
         ctx.checkpoint_label = checkpoint.get("at") or cp_date
     week_cutoff = (date.fromisoformat(today) - timedelta(days=WEEK)).isoformat()
+    stall_cutoff = (date.fromisoformat(today) - timedelta(days=STALL_DAYS)).isoformat()
 
     first_after_cp: Dict[int, int] = {}
     for row in history:
@@ -100,6 +116,8 @@ def build_context(history: Iterable[List[str]], checkpoint: Optional[Dict[str, A
             first_after_cp[fid] = power
         if day <= week_cutoff:
             ctx.week_ago[fid] = power          # rows are oldest-first: keeps the latest <= cutoff
+        if day <= stall_cutoff:
+            ctx.stall_ago[fid] = power
     ctx.baselines = {**first_after_cp, **cp_power}
     return ctx
 
@@ -115,11 +133,13 @@ def alliance_growth(members: List[Dict[str, Any]], ctx: PowerContext) -> Tuple[D
         power = int(power)
         base = ctx.baselines.get(fid)
         week = ctx.week_ago.get(fid)
+        then = ctx.stall_ago.get(fid)
         pct = (power - base) / base if base else None
         rows[fid] = Growth(
             power=power, baseline=base, growth_pct=pct,
             gain=(power - base) if base else None, vs_alliance=None,
             week_pct=((power - week) / week) if week else None, flagged=False,
+            stalled=bool(then) and power <= then and fid not in ctx.stall_stale,
         )
     pcts = [g.growth_pct for g in rows.values() if g.growth_pct is not None]
     median = statistics.median(pcts) if pcts else None
@@ -205,6 +225,26 @@ def record_snapshot(sh, rows: List[List[Any]], history: List[List[str]], today: 
             "sheetId": ws.id, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + old}}}]})
 
 
+def mark_stale_kingdoms(ctx: PowerContext, rosters) -> None:
+    """Fill ctx.stall_stale: every tracked member of a kingdom where under
+    STALL_MIN_CHANGED of members changed power since their STALL_DAYS-old
+    snapshot -- MightPulse didn't refresh it, so "no growth" means nothing."""
+    by_kid: Dict[str, List[Tuple[int, bool]]] = {}
+    for key, data in (rosters or {}).items():
+        kid = str(key[0])
+        for m in (data or {}).get("members") or []:
+            fid, power = _fid(m), m.get("power")
+            then = ctx.stall_ago.get(fid)
+            if fid and power is not None and then:
+                by_kid.setdefault(kid, []).append((fid, int(power) != then))
+    for kid, rows in by_kid.items():
+        changed = sum(1 for _f, c in rows if c)
+        if changed < STALL_MIN_CHANGED * len(rows):
+            ctx.stall_stale.update(f for f, _c in rows)
+            print(f"💤 Kingdom {kid}: only {changed}/{len(rows)} powers changed in {STALL_DAYS} days — "
+                  f"MightPulse data looks stale, not flagging anyone as no-growth")
+
+
 def prepare_power(sh, bot_data: Dict[str, Any], rosters, superseded, record: bool) -> PowerContext:
     """Load history, optionally record today's snapshot, build the context."""
     today = today_str()
@@ -216,6 +256,7 @@ def prepare_power(sh, bot_data: Dict[str, Any], rosters, superseded, record: boo
         record_snapshot(sh, new_rows, history, today)
         history = history + [[str(c) for c in r] for r in new_rows]
     ctx = build_context(history, bot_data.get("power_checkpoint"), today)
+    mark_stale_kingdoms(ctx, rosters)
     ctx.recorded = len(new_rows) if record else None
     ctx.history_days = len({r[0] for r in history})
     return ctx

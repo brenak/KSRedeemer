@@ -172,7 +172,10 @@ For each row with a `Player ID`:
 | No longer on the alliance roster | (tag handling below) | 🟪 `#8e7cc3` |
 | On the roster, position matches `x`/`y` | `o_x`/`o_y` cleared | 🟩 `#4ea72e` |
 | On the roster, position differs | current position → `o_x`/`o_y` | 🟨 `#fbbc04` |
+| On the roster with a position, but no power gained in 3+ days (trending inactive) | `o_x`/`o_y` as above; row moved below the active members | 💤 `#9fc5e8` |
 | On the roster, but MightPulse has no map position (inactive — not playing) | row moved below the active members | ⬜ `#b7b7b7` |
+
+Member order: active members by rank, then trending-inactive (💤) by rank, then inactive (⬜) by rank. "No power gained" compares today's power with the newest daily `Power History` snapshot at least 3 days old (a drop counts too); players without one that old are never flagged. If under a quarter of a kingdom's tracked members changed power in those 3 days, MightPulse hasn't refreshed it (no map update), so nobody there is flagged.
 
 Two kinds of columns:
 
@@ -221,6 +224,7 @@ To spot people spending instead of saving for KvK, every real sync records each 
   - `vs Alliance` — that growth as a multiple of the alliance's median growth (1.0× = typical; the median counts as at least 1%, so a flat alliance doesn't make every small gain an outlier)
   - `7d Growth %` — growth over the last 7 days (blank until a week of history exists)
 - **Flag:** the `vs Alliance` cell turns red when it's at least **2×** the median **and** the player gained at least **5M** power — comparing against the alliance rather than a fixed % keeps small accounts (which grow faster in % terms) from being flagged unfairly. Flagged names are listed in the `/sheet sync` summary (🔴 in the daily line).
+- **Health over time:** every real sync records each synced alliance's members, active, no-growth (💤) and inactive (⬜) counts for the day in a hidden `Health History` tab; the Analytics tab charts the totals across the tracked alliances by date (Total players / Active / No growth / Inactive). An alliance not synced on a day carries its latest numbers forward, so a one-tab sync doesn't dip the totals.
 - **Analytics:** a `Median Growth %` column per alliance, plus a "Top power gains" top-10 table and chart across all alliances — ranked by raw power gained, with each player's Growth % alongside (flagged players highlighted).
 
 **Analytics tab.** After every real `/sheet sync` (not dry runs), and on `/sheet analytics`, the bot rewrites an `Analytics` tab comparing **all** configured alliances — even ones not synced in that run:

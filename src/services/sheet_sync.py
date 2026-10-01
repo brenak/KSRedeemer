@@ -59,7 +59,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.config import GOOGLE_SHEETS_CREDENTIALS_PATH, GOOGLE_SHEET_ID
 from services.mightpulse_client import MightPulseClient, MightPulseError, MightPulseRateLimited
-from services.power_growth import FLAG_COLOR, PowerContext, alliance_growth, now_local
+from services.power_growth import FLAG_COLOR, STALL_COLOR, STALL_DAYS, PowerContext, alliance_growth, now_local
 
 REQUIRED_COLUMNS = ("player id", "x", "y", "observed_x", "observed_y", "observed_tag",
                     "notes", "original_name")
@@ -152,6 +152,8 @@ class SyncResult:
     labels_updated: int = 0
     kingdoms_changed: int = 0
     position_unknown: int = 0
+    stalled: int = 0                  # no power growth for STALL_DAYS+ days
+    members: int = 0                  # on this alliance's live roster (health chart)
     skipped_no_player_id: int = 0
     skipped_not_found: int = 0
     new_members_added: int = 0
@@ -167,6 +169,8 @@ class SyncResult:
         """One line for the daily auto-sync post."""
         parts = [f"🟩{self.matched}", f"🟨{self.mismatched}", f"🟪{self.not_in_alliance}",
                  f"⬜{self.position_unknown}", f"➕{self.new_members_added}"]
+        if self.stalled:
+            parts.append(f"💤{self.stalled} no growth")
         if self.kingdoms_changed:
             parts.append(f"🌍{self.kingdoms_changed} transferred")
         if self.flagged_nicks:
@@ -203,6 +207,8 @@ class SyncResult:
             lines.append(f"🏷️ Names updated: {self.labels_updated}")
         if self.kingdoms_changed:
             lines.append(f"🌍 Kingdom changed (transferred): {self.kingdoms_changed}")
+        if self.stalled:
+            lines.append(f"💤 No power growth for {STALL_DAYS}+ days (trending inactive — moved down): {self.stalled}")
         if self.position_unknown:
             lines.append(f"⬜ Inactive (no map position — moved to the bottom): {self.position_unknown}")
         if self.skipped_not_found:
@@ -234,6 +240,7 @@ class SyncPlan:
     flag_cells: List[Tuple[int, str]] = field(default_factory=list)                 # (row, column letter) -> FLAG_COLOR
     row_ranks: Dict[int, int] = field(default_factory=dict)       # existing member row -> rank_sort_key
     new_row_ranks: List[int] = field(default_factory=list)        # parallel to new_rows
+    stalled_rows: List[int] = field(default_factory=list)         # existing rows: no growth for STALL_DAYS+ days
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -319,6 +326,8 @@ def _status_body(result: "SyncResult", synced_at: str) -> str:
     """Everything after "📊 98/100 members · "."""
     parts = [f"🟩 {result.matched} matched", f"🟨 {result.mismatched} new position",
              f"⬜ {result.position_unknown} inactive", f"🟪 {result.not_in_alliance} left"]
+    if result.stalled:
+        parts.insert(2, f"💤 {result.stalled} no growth")
     if result.new_members_added:
         parts.append(f"➕ {result.new_members_added} new")
     if result.skipped_not_found:
@@ -494,12 +503,14 @@ def plan_sync(
     growth = growth or {}
     col = resolve_columns(header)
     result = SyncResult()
+    result.members = sum(1 for fid in roster if fid not in moved_to)
     value_updates: List[Dict[str, Any]] = []
     row_colors: List[Tuple[int, str]] = []
     flag_cells: List[Tuple[int, str]] = []
     row_ranks: Dict[int, int] = {}
     new_row_ranks: List[int] = []
     inactive_rows: List[int] = []
+    stalled_rows: List[int] = []
     departed_rows: List[int] = []
     seen: set = set()
 
@@ -604,12 +615,19 @@ def plan_sync(
             result.matched += 1
             put("observed_x", row_num, "")
             put("observed_y", row_num, "")
-            row_colors.append((row_num, MATCH_COLOR))
+            color = MATCH_COLOR
         else:
             result.mismatched += 1
             put("observed_x", row_num, cur_x)
             put("observed_y", row_num, cur_y)
-            row_colors.append((row_num, MISMATCH_COLOR))
+            color = MISMATCH_COLOR
+        # Trending inactive: own color (o_x / o_y above still tell whether
+        # they moved) and moved down below the active members.
+        if g is not None and g.stalled:
+            result.stalled += 1
+            color = STALL_COLOR
+            stalled_rows.append(row_num)
+        row_colors.append((row_num, color))
 
     new_rows: List[List[Optional[str]]] = []
     new_row_colors: List[Optional[str]] = []
@@ -642,7 +660,10 @@ def plan_sync(
             # and a later move flags gold.
             new_row[col["x"]] = str(player["x"])
             new_row[col["y"]] = str(player["y"])
-            new_row_colors.append(MATCH_COLOR)
+            stalled = fid in growth and growth[fid].stalled
+            if stalled:
+                result.stalled += 1
+            new_row_colors.append(STALL_COLOR if stalled else MATCH_COLOR)
         else:
             new_row_colors.append(INACTIVE_COLOR)
             result.position_unknown += 1
@@ -659,7 +680,8 @@ def plan_sync(
     power_col = _col_letter(col["power"]) if "power" in col else None
     column_formats = [(_col_letter(col[k]), f) for k, f in GROWTH_NUMBER_FORMATS.items() if k in col]
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
-                    inactive_rows, departed_rows, column_formats, flag_cells, row_ranks, new_row_ranks)
+                    inactive_rows, departed_rows, column_formats, flag_cells, row_ranks, new_row_ranks,
+                    stalled_rows)
 
 
 def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
@@ -829,6 +851,7 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
 
     colors = list(plan.row_colors)
     inactive = list(plan.inactive_rows)
+    stalled = list(plan.stalled_rows)
     departed = set(plan.departed_rows)
     # The member list ends at the last member's row -- not the last row with
     # any value (a number-only column like =SEQUENCE(100) fills rows with
@@ -838,6 +861,7 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
         start = _place_new_rows(ws, plan.new_rows, current, last_member_row)
         colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
         inactive += [start + i for i, c in enumerate(plan.new_row_colors) if c == INACTIVE_COLOR]
+        stalled += [start + i for i, c in enumerate(plan.new_row_colors) if c == STALL_COLOR]
 
     formats = [
         {"range": f"A{row_num}:{plan.highlight_end}{row_num}",
@@ -869,8 +893,11 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
         # Leader, R4, R3, R2, R1; ties keep their current order (row number).
         return sorted(set(rows), key=lambda r: (ranks.get(r, UNKNOWN_RANK), r))
 
-    active = by_rank([r for r in member_rows if r not in set(inactive)])
-    inactive = by_rank(inactive)
+    # Active members by rank, then trending-inactive (no growth), then
+    # inactive (no map position) -- each group by rank.
+    held_back = set(inactive) | set(stalled)
+    active = by_rank([r for r in member_rows if r not in held_back])
+    inactive = by_rank([r for r in stalled if r not in set(inactive)]) + by_rank(inactive)
     moves, rows_needed = _arrange_rows(ws.id, active, inactive, sorted(departed))
     if rows_needed > ws.row_count:
         ws.add_rows(rows_needed - ws.row_count)
