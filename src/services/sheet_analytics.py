@@ -62,8 +62,9 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
      "(row 102 on).",
      "Follow up, or remove the row."),
     (STALL_COLOR, "No growth (trending inactive)",
-     f"On the roster with a map position, but no power gained over the last {STALL_DAYS} days (from the daily "
-     "Power History). Active players gain something every day. Moved below the active members.",
+     f"On the roster with a map position, but their power hasn't gone up at all in {STALL_DAYS} days (from the "
+     "daily Power History). Drops from being attacked don't count either way: flat, or flat then attacked, is "
+     "inactive; growing then attacked is active. Moved below the active members.",
      "Check in — they may be drifting away."),
     (INACTIVE_COLOR, "Inactive",
      "On the roster, but MightPulse has no map position for them — they haven't been playing. "
@@ -84,6 +85,9 @@ LEGEND_COLUMNS: List[Tuple[str, str]] = [
      "Live — refreshed from MightPulse on every sync. TC_Level shows True Gold tiers (55 = TG5, 54 = TG4.4)."),
     ("Original_Name", "The name when the member was first added. Never changed."),
     ("Current_Tag, x, y", "Recorded values — set when the member is added, then only changed by hand."),
+    ("p_x, p_y",
+     "Planned position from a KSHive layout — written when someone presses \"Write to sheet\" in KSHive; blank "
+     "if the member isn't being moved. The sync never changes them, and they stay with the member's row."),
     ("o_tag, o_x, o_y",
      "The live value, filled in only while it differs from Current_Tag / x / y; cleared once they match again."),
     ("notes", "\"not found\" is written by the sync; otherwise the column is yours."),
@@ -95,7 +99,8 @@ LEGEND_COLUMNS: List[Tuple[str, str]] = [
 ]
 LEGEND_FOOTER = [
     "Tabs sync automatically once a day; run /sheet sync in Discord to update now.",
-    "Members are listed by rank (Leader, R4, R3, R2, R1), inactive members after them, and ex-members from row 102.",
+    "Members are listed by rank (Leader, R4, R3, R2, R1), then no-growth members, then inactive members, "
+    "and ex-members from row 102.",
     f"The {ANALYTICS_TAB} tab compares alliances with at least 5 billion total power.",
     f"Power is recorded daily in the hidden '{HISTORY_TAB}' tab (last {HISTORY_DAYS} days) to measure growth.",
 ]

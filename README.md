@@ -172,10 +172,10 @@ For each row with a `Player ID`:
 | No longer on the alliance roster | (tag handling below) | 🟪 `#8e7cc3` |
 | On the roster, position matches `x`/`y` | `o_x`/`o_y` cleared | 🟩 `#4ea72e` |
 | On the roster, position differs | current position → `o_x`/`o_y` | 🟨 `#fbbc04` |
-| On the roster with a position, but no power gained in 3+ days (trending inactive) | `o_x`/`o_y` as above; row moved below the active members | 💤 `#9fc5e8` |
+| On the roster with a position, but power hasn't gone up in 3+ days (trending inactive) | `o_x`/`o_y` as above; row moved below the active members | 💤 `#9fc5e8` |
 | On the roster, but MightPulse has no map position (inactive — not playing) | row moved below the active members | ⬜ `#b7b7b7` |
 
-Member order: active members by rank, then trending-inactive (💤) by rank, then inactive (⬜) by rank. "No power gained" compares today's power with the newest daily `Power History` snapshot at least 3 days old (a drop counts too); players without one that old are never flagged. If under a quarter of a kingdom's tracked members changed power in those 3 days, MightPulse hasn't refreshed it (no map update), so nobody there is flagged.
+Member order: active members by rank, then trending-inactive (💤) by rank, then inactive (⬜) by rank. "No growth" means power never went **up** over the last 3 days — from the newest daily `Power History` snapshot at least 3 days old, through every snapshot since, to today. Drops from being attacked are ignored: flat (0%) is inactive, flat then attacked (0% → −%) is still inactive, but growing then attacked (+% → −%) is active. Players without a snapshot that old are never flagged. If under a quarter of a kingdom's tracked members changed power in those 3 days, MightPulse hasn't refreshed it (no map update), so nobody there is flagged.
 
 Two kinds of columns:
 

@@ -37,10 +37,12 @@ MEDIAN_FLOOR = 0.01        # median growth treated as at least 1%, so a flat
                            # alliance doesn't turn every small gain into an outlier
 FLAG_COLOR = "e06666"      # Google Sheets "light red 1"
 
-# Trending inactive: no power gained over the last STALL_DAYS days (today's
-# power no higher than the newest snapshot at least that old). Active
-# players gain *something* every day; a drop counts too (troops lost while
-# offline). Needs a snapshot that old, so new players are never flagged.
+# Trending inactive: power never went *up* over the last STALL_DAYS days --
+# from the newest snapshot at least that old, through every snapshot since,
+# to today. Drops are ignored: being attacked doesn't make anyone active or
+# inactive. So flat (0%) is inactive, flat-then-attacked (0% -> -%) is still
+# inactive, but grew-then-attacked (+% -> -%) is active. Needs a snapshot
+# that old, so new players are never flagged.
 STALL_DAYS = 3
 STALL_COLOR = "9fc5e8"     # Google Sheets "light blue 2"
 # ...but only where MightPulse actually refreshed: if under this share of a
@@ -75,6 +77,7 @@ class PowerContext:
     baselines: Dict[int, int] = field(default_factory=dict)   # fid -> baseline power
     week_ago: Dict[int, int] = field(default_factory=dict)    # fid -> power >= 7 days ago
     stall_ago: Dict[int, int] = field(default_factory=dict)   # fid -> power >= STALL_DAYS days ago
+    stall_recent: Dict[int, List[int]] = field(default_factory=dict)  # fid -> powers snapshotted since, in order
     stall_stale: set = field(default_factory=set)             # fids in kingdoms whose data didn't refresh
     checkpoint_label: Optional[str] = None                     # when the checkpoint was taken
     first_snapshot: Optional[str] = None                       # earliest date on record
@@ -91,7 +94,7 @@ class Growth:
     vs_alliance: Optional[float]      # multiple of the alliance median
     week_pct: Optional[float]
     flagged: bool
-    stalled: bool = False             # no power gained over STALL_DAYS days
+    stalled: bool = False             # power never went up over STALL_DAYS days
 
 
 def build_context(history: Iterable[List[str]], checkpoint: Optional[Dict[str, Any]], today: str) -> PowerContext:
@@ -118,8 +121,16 @@ def build_context(history: Iterable[List[str]], checkpoint: Optional[Dict[str, A
             ctx.week_ago[fid] = power          # rows are oldest-first: keeps the latest <= cutoff
         if day <= stall_cutoff:
             ctx.stall_ago[fid] = power
+            ctx.stall_recent.pop(fid, None)    # a newer base: only snapshots after it count
+        else:
+            ctx.stall_recent.setdefault(fid, []).append(power)
     ctx.baselines = {**first_after_cp, **cp_power}
     return ctx
+
+
+def never_rose(powers: List[int]) -> bool:
+    """True if no step in the sequence goes up (drops and flat are fine)."""
+    return all(b <= a for a, b in zip(powers, powers[1:]))
 
 
 def alliance_growth(members: List[Dict[str, Any]], ctx: PowerContext) -> Tuple[Dict[int, Growth], Optional[float]]:
@@ -139,7 +150,8 @@ def alliance_growth(members: List[Dict[str, Any]], ctx: PowerContext) -> Tuple[D
             power=power, baseline=base, growth_pct=pct,
             gain=(power - base) if base else None, vs_alliance=None,
             week_pct=((power - week) / week) if week else None, flagged=False,
-            stalled=bool(then) and power <= then and fid not in ctx.stall_stale,
+            stalled=bool(then) and never_rose([then, *ctx.stall_recent.get(fid, []), power])
+                    and fid not in ctx.stall_stale,
         )
     pcts = [g.growth_pct for g in rows.values() if g.growth_pct is not None]
     median = statistics.median(pcts) if pcts else None
