@@ -295,7 +295,8 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                    grower_series: Optional[List[int]] = None,
                    growers_title: str = "Top power gains since the checkpoint",
                    health_rows: int = 0, health_col: int = 0, health_title: str = "",
-                   activity_rows: int = 0, activity_col: int = 0) -> List[Dict[str, Any]]:
+                   activity_rows: int = 0, activity_col: int = 0,
+                   tg5_col: Optional[int] = None, tc_col: Optional[int] = None) -> List[Dict[str, Any]]:
     """`grower_series`: main-table index of each alliance column in the
     hidden growers block (GROWERS_SERIES_COL on), in order -- drives each
     series' color so it matches the pie."""
@@ -305,13 +306,18 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
     def series(name: str) -> Dict[str, Any]:
         return {"sourceRange": {"sources": [_grid(sheet_id, COL[name], rows)]}}
 
+    # TG5 pie: from its hidden block ("1MK: 42" labels -- the API can't
+    # print values on slices), same row order as the table so the slice
+    # colors still match the other charts. Falls back to the table.
+    pie_label_col, pie_value_col = (tg5_col, tg5_col + 1) if tg5_col is not None else (COL["Alliance"], COL["TG5"])
     tg5_pie = {
         "title": "TG5 players by alliance",
+        "hiddenDimensionStrategy": "SHOW_ALL",
         "pieChart": {
             "legendPosition": "RIGHT_LEGEND",
             # Pie ranges skip the header row (no headerCount on pies).
-            "domain": {"sourceRange": {"sources": [{**_grid(sheet_id, COL["Alliance"], rows), "startRowIndex": 1}]}},
-            "series": {"sourceRange": {"sources": [{**_grid(sheet_id, COL["TG5"], rows), "startRowIndex": 1}]}},
+            "domain": {"sourceRange": {"sources": [{**_grid(sheet_id, pie_label_col, rows), "startRowIndex": 1}]}},
+            "series": {"sourceRange": {"sources": [{**_grid(sheet_id, pie_value_col, rows), "startRowIndex": 1}]}},
         },
     }
     power_bar = {
@@ -326,8 +332,16 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                         "styleOverrides": _point_colors(list(range(rows)))}],
         },
     }
+    # TC bars: counts printed on each segment (black: >= 5.6:1 on all of
+    # Sheets' default series colors). From its hidden block, where zero
+    # buckets are blank so they don't print a stray "0".
+    def tc_series(i: int) -> Dict[str, Any]:
+        if tc_col is None:
+            return series(TC_BUCKETS[i][0])
+        return {"sourceRange": {"sources": [_grid(sheet_id, tc_col + 1 + i, rows)]}}
     tc_stacked = {
         "title": "Town center levels by alliance",
+        "hiddenDimensionStrategy": "SHOW_ALL",
         "basicChart": {
             "chartType": "BAR",
             "stackedType": "STACKED",
@@ -335,7 +349,10 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
             "headerCount": 1,
             "axis": [{"position": "BOTTOM_AXIS", "title": "Members"}],
             "domains": [{"domain": domain}],
-            "series": [{"series": series(b[0]), "targetAxis": "BOTTOM_AXIS"} for b in TC_BUCKETS],
+            "series": [{"series": tc_series(i), "targetAxis": "BOTTOM_AXIS",
+                        "dataLabel": {"type": "DATA", "placement": "CENTER", "textFormat": {
+                            "bold": True, "foregroundColorStyle": {"rgbColor": {"red": 0, "green": 0, "blue": 0}}}}}
+                       for i in range(len(TC_BUCKETS))],
         },
     }
     requests = [
@@ -512,7 +529,10 @@ def write_legend(sh) -> None:
 
 
 def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optional[List[Grower]] = None,
-                    growth_note: str = "", growers_title: str = "Top power gains since the checkpoint") -> None:
+                    growth_note: str = "", growers_title: str = "Top power gains since the checkpoint",
+                    all_alliances: Optional[List[Tuple[str, str]]] = None) -> None:
+    """`all_alliances`: (label, tab) of every tracked alliance, for the
+    Activity by alliance chart (the table only has the 5B+ ones)."""
     """Rewrite the Analytics tab (blocking): tables, formatting, charts."""
     growers = growers or []
     series_alliances, series_rows = growers_series_block(growers, [st.label for st in stats])
@@ -524,20 +544,32 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     health_rows = health_history.load(sh)
     health, health_title = health_history.pie_block(health_history.series(health_rows))
     health_col = GROWERS_SERIES_COL + (len(series_alliances) + 1 if series_alliances else 0)
-    # Activity by alliance: each table alliance's latest Health History
-    # counts (by its tab), hidden block right after the pie's.
+    # Activity by alliance: every tracked alliance's latest Health History
+    # counts (by its tab) -- not just the table's 5B+ ones.
     latest = health_history.latest_by_alliance(health_rows)
+    pairs = all_alliances or [(st.label, st.tab) for st in stats]
     # Zero counts left blank: no zero-width segment with a stray "0" label.
     activity = [ACTIVITY_HEADER] + [
-        [st.label, *[n or "" for n in (*latest[st.tab][1:], max(0, ALLIANCE_SLOTS - latest[st.tab][0]))]]
-        for st in stats if st.tab in latest]
+        [label, *[n or "" for n in (*latest[tab][1:], max(0, ALLIANCE_SLOTS - latest[tab][0]))]]
+        for label, tab in pairs if tab in latest]
     if len(activity) == 1:
         activity = []
-    activity_col = health_col + (len(health[0]) + 1 if health else 0)
-    if activity:
-        grid_width = activity_col + len(ACTIVITY_HEADER)
-    elif health:
-        grid_width = health_col + len(health[0])
+    # TG5 pie labels with counts; TC buckets with zeros blank (chart copies;
+    # the table keeps its numbers).
+    tg5_block = [["Alliance", "TG5"]] + [[f"{st.label}: {st.buckets.get('TG5', 0)}", st.buckets.get("TG5", 0)]
+                                         for st in stats] if stats else []
+    tc_block = [["Alliance"] + [b[0] for b in TC_BUCKETS]] + [
+        [st.label] + [st.buckets.get(b[0], 0) or "" for b in TC_BUCKETS] for st in stats] if stats else []
+    # Hidden chart-data blocks, left to right after the growers series.
+    next_col = health_col
+    block_col: Dict[str, int] = {}
+    for name, data in (("health", health), ("activity", activity), ("tg5", tg5_block), ("tc", tc_block)):
+        if data:
+            block_col[name] = next_col
+            next_col += len(data[0]) + 1
+    activity_col = block_col.get("activity", 0)
+    if block_col:
+        grid_width = next_col - 1
     else:
         grid_width = GROWERS_SERIES_COL + len(series_alliances) if series_alliances else width
     ws = _get_or_create(sh, ANALYTICS_TAB, index=0, rows=60, cols=grid_width)
@@ -560,6 +592,9 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
         ws.update(values=health, range_name=f"{_col_letter(health_col)}1", raw=True)
     if activity:
         ws.update(values=activity, range_name=f"{_col_letter(activity_col)}1", raw=True)
+    for name, data in (("tg5", tg5_block), ("tc", tc_block)):
+        if data:
+            ws.update(values=data, range_name=f"{_col_letter(block_col[name])}1", raw=True)
 
     requests: List[Dict[str, Any]] = [
         # Reset the whole tab to Arial 11, then bold the header (same font).
@@ -659,8 +694,9 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
                                    growers_title=growers_title,
                                    health_rows=len(health) - 1 if health else 0, health_col=health_col,
                                    health_title=health_title,
-                                   activity_rows=len(activity) - 1 if activity else 0, activity_col=activity_col)
-    if series_alliances or health or activity:
+                                   activity_rows=len(activity) - 1 if activity else 0, activity_col=activity_col,
+                                   tg5_col=block_col.get("tg5"), tc_col=block_col.get("tc"))
+    if series_alliances or block_col:
         # Keep the chart-data blocks out of sight (the charts still read them).
         requests.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS",
@@ -747,7 +783,8 @@ async def update_analytics(
             growth_note = (f"Growth since tracking began ({since}) — "
                            f"run /sheet checkpoint right after KvK to measure from there")
             growers_title = f"Top power gains since tracking began ({since})"
-    gid = await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note, growers_title)
+    gid = await asyncio.to_thread(write_analytics, stats, notes, growers, growth_note, growers_title,
+                                  [(label, t["tab"]) for t, label in zip(targets, labels)])
     summary = (f"📊 {sheet_link(ANALYTICS_TAB + ' tab', gid)} updated {now_local().strftime('%H:%M %Z')}"
                f" — {len(stats)} alliance(s)")
     if below_min:

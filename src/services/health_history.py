@@ -84,7 +84,9 @@ def pie_block(series_rows: List[List[Any]]) -> Tuple[List[List[Any]], str]:
     if not series_rows:
         return [], ""
     day, total, active, stalled, inactive = series_rows[-1]
-    rows = [PIE_HEADER, ["Active", active], ["No growth", stalled], ["Inactive", inactive]]
+    # The count goes in each label: the API can't print values on slices.
+    rows = [PIE_HEADER, [f"Active: {active}", active], [f"No growth: {stalled}", stalled],
+            [f"Inactive: {inactive}", inactive]]
     return rows, f"Activity - {total:,} players ({day})"
 
 
