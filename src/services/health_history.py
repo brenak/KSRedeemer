@@ -60,6 +60,23 @@ def series(rows: List[List[Any]]) -> List[List[Any]]:
     return out
 
 
+def latest_by_alliance(rows: List[List[Any]]) -> Dict[str, Counts]:
+    """Each alliance's most recent (members, active, no growth, inactive).
+    Pure."""
+    out: Dict[str, Tuple[str, Counts]] = {}
+    for r in rows:
+        if len(r) < 6 or not r[0]:
+            continue
+        try:
+            counts = tuple(int(str(v).replace(",", "")) for v in r[2:6])
+        except ValueError:
+            continue
+        day, alliance = str(r[0]), str(r[1])
+        if alliance not in out or day >= out[alliance][0]:
+            out[alliance] = (day, counts)
+    return {a: c for a, (_d, c) in out.items()}
+
+
 def pie_block(series_rows: List[List[Any]]) -> Tuple[List[List[Any]], str]:
     """(pie data -- header + Active / No growth / Inactive -- and its title
     with the total) for the latest day in `series_rows`; ([], "") if there's
