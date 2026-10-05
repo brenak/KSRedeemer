@@ -118,7 +118,13 @@ TC_BUCKETS: List[Tuple[str, int, Optional[int]]] = [
     ("TG1", 35, 39),
     ("Below TG1", 1, 34),
 ]
-ACTIVITY_HEADER = ["Alliance", "Active", "No growth", "Inactive"]
+ACTIVITY_HEADER = ["Alliance", "Active", "No growth", "Inactive", "Open slots"]
+ALLIANCE_SLOTS = 100            # most members an alliance can have
+# Activity bar colors: deeper shades of the alliance tabs' row colors (the
+# row colors are pale -- fine under black text, but 1.4-2:1 as bars on the
+# chart's white background). Each is >= 5:1 against white, and the white
+# count printed on each segment is >= 5:1 against it (WCAG AA).
+ACTIVITY_COLORS = ("2e7d32", "1f6fb2", "616161", "806a45")   # active, no growth, inactive, open slots
 HEADER = (["Alliance", "Kingdom", "Members"] + [b[0] for b in TC_BUCKETS]
           + ["Total Power", "Avg Power", "Top Power", "Median Growth %"])
 COL = {h: i for i, h in enumerate(HEADER)}
@@ -377,9 +383,10 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
         }
         requests.append({"addChart": {"chart": {"spec": health_pie, "position": _anchor(sheet_id, at["health"])}}})
     if activity_rows:
-        # Per alliance (the table's alliances): Active / No growth / Inactive,
-        # stacked, in the alliance tabs' row colors. Hidden block at
-        # activity_col: Alliance, Active, No growth, Inactive.
+        # Per alliance (the table's alliances): Active / No growth / Inactive
+        # in the alliance tabs' row colors, then Open slots -- stacked to the
+        # 100 an alliance can hold. Hidden block at activity_col: Alliance,
+        # Active, No growth, Inactive, Open slots.
         activity_bar = {
             "title": "Activity by alliance",
             "hiddenDimensionStrategy": "SHOW_ALL",
@@ -388,11 +395,18 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                 "stackedType": "STACKED",
                 "legendPosition": "BOTTOM_LEGEND",
                 "headerCount": 1,
-                "axis": [{"position": "BOTTOM_AXIS", "title": "Members"}],
+                "axis": [{"position": "BOTTOM_AXIS", "title": f"Members (of {ALLIANCE_SLOTS})",
+                          "viewWindowOptions": {"viewWindowMode": "EXPLICIT", "viewWindowMin": 0,
+                                                "viewWindowMax": ALLIANCE_SLOTS}}],
                 "domains": [{"domain": {"sourceRange": {"sources": [_grid(sheet_id, activity_col, activity_rows)]}}}],
+                # Each segment shows its count, so colors aren't the only way
+                # to tell them apart.
                 "series": [{"series": {"sourceRange": {"sources": [_grid(sheet_id, activity_col + 1 + i, activity_rows)]}},
-                            "targetAxis": "BOTTOM_AXIS", "colorStyle": {"rgbColor": _hex_to_rgb_float(c)}}
-                           for i, c in enumerate((MATCH_COLOR, STALL_COLOR, INACTIVE_COLOR))],
+                            "targetAxis": "BOTTOM_AXIS", "colorStyle": {"rgbColor": _hex_to_rgb_float(c)},
+                            "dataLabel": {"type": "DATA", "placement": "CENTER",
+                                          "textFormat": {"bold": True, "foregroundColorStyle": {
+                                              "rgbColor": {"red": 1, "green": 1, "blue": 1}}}}}
+                           for i, c in enumerate(ACTIVITY_COLORS)],
             },
         }
         requests.append({"addChart": {"chart": {"spec": activity_bar,
@@ -513,7 +527,10 @@ def write_analytics(stats: List[AllianceStats], notes: List[str], growers: Optio
     # Activity by alliance: each table alliance's latest Health History
     # counts (by its tab), hidden block right after the pie's.
     latest = health_history.latest_by_alliance(health_rows)
-    activity = [ACTIVITY_HEADER] + [[st.label, *latest[st.tab][1:]] for st in stats if st.tab in latest]
+    # Zero counts left blank: no zero-width segment with a stray "0" label.
+    activity = [ACTIVITY_HEADER] + [
+        [st.label, *[n or "" for n in (*latest[st.tab][1:], max(0, ALLIANCE_SLOTS - latest[st.tab][0]))]]
+        for st in stats if st.tab in latest]
     if len(activity) == 1:
         activity = []
     activity_col = health_col + (len(health[0]) + 1 if health else 0)
