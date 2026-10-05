@@ -53,7 +53,6 @@ are never repainted.
 """
 
 import asyncio
-import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -154,6 +153,7 @@ class SyncResult:
     position_unknown: int = 0
     stalled: int = 0                  # no power growth for STALL_DAYS+ days
     members: int = 0                  # on this alliance's live roster (health chart)
+    misplaced_cleared: int = 0        # shifted copies of a member row cleared (see _misplaced_member_row)
     skipped_no_player_id: int = 0
     skipped_not_found: int = 0
     new_members_added: int = 0
@@ -214,6 +214,9 @@ class SyncResult:
             lines.append(f"⬜ Inactive (no map position — moved to the bottom): {self.position_unknown}")
         if self.skipped_not_found:
             lines.append(f"⚠️ Not found on MightPulse: {self.skipped_not_found}")
+        if self.misplaced_cleared:
+            lines.append(f"🧹 {'Would clear' if self.dry_run else 'Cleared'} misplaced row(s) "
+                         f"(a member's data shifted to the right): {self.misplaced_cleared}")
         if self.skipped_no_player_id:
             lines.append(f"⏭️ Rows without a Player ID: {self.skipped_no_player_id}")
         if self.flagged_nicks:
@@ -242,6 +245,7 @@ class SyncPlan:
     row_ranks: Dict[int, int] = field(default_factory=dict)       # existing member row -> rank_sort_key
     new_row_ranks: List[int] = field(default_factory=list)        # parallel to new_rows
     stalled_rows: List[int] = field(default_factory=list)         # existing rows: no growth for STALL_DAYS+ days
+    clear_rows: List[int] = field(default_factory=list)           # misplaced copies to empty (values + color)
 
 
 def _hex_to_rgb_float(hex_color: str) -> Dict[str, float]:
@@ -486,6 +490,22 @@ def row_player_ids(data_rows: List[List[str]], col: Dict[str, int]) -> List[int]
     return [pid for pid in (_parse_int_cell(r, col["player id"]) for r in data_rows) if pid is not None]
 
 
+def _misplaced_member_row(row: List[str], pid_idx: int, known_ids: set) -> bool:
+    """A member's row written shifted to the right -- Sheets' "append to
+    table" once put new members' data from column L: nothing in the Player
+    ID column, but somewhere else a kingdom number followed directly by a
+    Player ID this tab or roster knows. That exact pattern, so a note that
+    mentions an ID is never mistaken for one."""
+    cells = [str(c).strip() for c in row]
+    for i in range(len(cells) - 1):
+        if i + 1 == pid_idx:
+            continue
+        k, p = cells[i], cells[i + 1]
+        if k.isdigit() and len(k) <= 5 and p.isdigit() and int(p) in known_ids:
+            return True
+    return False
+
+
 def plan_sync(
     header: List[str],
     data_rows: List[List[str]],
@@ -512,6 +532,10 @@ def plan_sync(
     new_row_ranks: List[int] = []
     inactive_rows: List[int] = []
     stalled_rows: List[int] = []
+    clear_rows: List[int] = []
+    # Every Player ID this tab or roster knows -- to recognise a member's row
+    # that got written shifted to the right (no Player ID in its column).
+    known_ids = set(roster) | set(moved_to) | {p for p in (_parse_int_cell(r, col["player id"]) for r in data_rows) if p}
     departed_rows: List[int] = []
     seen: set = set()
 
@@ -531,6 +555,10 @@ def plan_sync(
         row_num = offset + 2  # 1-indexed, +1 for the header row
         pid = _parse_int_cell(row, col["player id"])
         if pid is None:
+            if _misplaced_member_row(row, col["player id"], known_ids):
+                result.misplaced_cleared += 1
+                clear_rows.append(row_num)
+                continue
             # Only rows someone put something in: empty slots in the member
             # list (which this sync may fill with new members) aren't problems.
             if any(str(c).strip() for c in row):
@@ -682,7 +710,7 @@ def plan_sync(
     column_formats = [(_col_letter(col[k]), f) for k, f in GROWTH_NUMBER_FORMATS.items() if k in col]
     return SyncPlan(result, value_updates, row_colors, new_rows, new_row_colors, highlight_end, power_col,
                     inactive_rows, departed_rows, column_formats, flag_cells, row_ranks, new_row_ranks,
-                    stalled_rows)
+                    stalled_rows, clear_rows)
 
 
 def roster_key(kid: str, abbr: str) -> Tuple[str, str]:
@@ -824,17 +852,6 @@ def _init_header(ws, header: List[str]) -> None:
     ws.set_basic_filter()
 
 
-def _appended_start_row(response: Any) -> Optional[int]:
-    """First row number of an append_rows call, from its updatedRange
-    (e.g. "'1MK'!A2:I23" -> 2)."""
-    try:
-        updated = response["updates"]["updatedRange"]
-    except (TypeError, KeyError):
-        return None
-    m = re.search(r"![A-Z]+(\d+)", updated)
-    return int(m.group(1)) if m else None
-
-
 def _player_id_column(all_values: List[List[str]], pid_idx: int) -> List[str]:
     return [(r[pid_idx].strip() if pid_idx < len(r) else "") for r in all_values[1:]]
 
@@ -869,12 +886,22 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     # The member list ends at the last member's row -- not the last row with
     # any value (a number-only column like =SEQUENCE(100) fills rows with
     # no member in them), and not an ex-member parked below the list.
+    if plan.clear_rows:
+        # Empty the misplaced copies -- values and row color -- across the
+        # whole row; the member is synced from their real row (or re-added).
+        last_col = _col_letter(max(ws.col_count, len(header)) - 1)
+        ws.batch_clear([f"A{r}:{last_col}{r}" for r in plan.clear_rows])
+        ws.client.batch_update(ws.spreadsheet_id, {"requests": [
+            {"repeatCell": {"range": {"sheetId": ws.id, "startRowIndex": r - 1, "endRowIndex": r},
+                            "cell": {"userEnteredFormat": {}}, "fields": "userEnteredFormat.backgroundColor"}}
+            for r in plan.clear_rows]})
+        current = [([""] * len(r) if i + 1 in plan.clear_rows else r) for i, r in enumerate(current)]
     last_member_row = _last_member_row(current, pid_idx, exclude=departed)
     if plan.new_rows:
-        start = _place_new_rows(ws, plan.new_rows, current, last_member_row)
-        colors += [(start + i, c) for i, c in enumerate(plan.new_row_colors) if c]
-        inactive += [start + i for i, c in enumerate(plan.new_row_colors) if c == INACTIVE_COLOR]
-        stalled += [start + i for i, c in enumerate(plan.new_row_colors) if c == STALL_COLOR]
+        new_at = _place_new_rows(ws, plan.new_rows, current, last_member_row)
+        colors += [(new_at[i], c) for i, c in enumerate(plan.new_row_colors) if c]
+        inactive += [new_at[i] for i, c in enumerate(plan.new_row_colors) if c == INACTIVE_COLOR]
+        stalled += [new_at[i] for i, c in enumerate(plan.new_row_colors) if c == STALL_COLOR]
 
     formats = [
         {"range": f"A{row_num}:{plan.highlight_end}{row_num}",
@@ -897,10 +924,10 @@ def _write_plan(ws, plan: SyncPlan, header: List[str], fresh: bool,
     # alignment + auto-fit -- one request, every run so existing tabs match.
     pid_rows = [i for i, row in enumerate(current[1:], start=2) if pid_idx < len(row) and row[pid_idx].strip()]
     member_rows = [r for r in pid_rows if r not in departed]
-    member_rows += [start + i for i in range(len(plan.new_rows))] if plan.new_rows else []
+    member_rows += new_at if plan.new_rows else []
     ranks = dict(plan.row_ranks)
     if plan.new_rows:
-        ranks.update({start + i: rk for i, rk in enumerate(plan.new_row_ranks)})
+        ranks.update({new_at[i]: rk for i, rk in enumerate(plan.new_row_ranks)})
 
     def by_rank(rows: List[int]) -> List[int]:
         # Leader, R4, R3, R2, R1; ties keep their current order (row number).
@@ -944,26 +971,26 @@ def _last_member_row(values: List[List[str]], pid_idx: int, exclude: Optional[se
 
 
 def _place_new_rows(ws, new_rows: List[List[Optional[str]]], current: List[List[str]],
-                    last_member_row: int) -> int:
-    """Write new members directly under the last member and return the
-    first row used. Cells we have no value for are sent as null (skipped),
-    so formula columns are untouched. The rows used must be empty; if
-    anything is there -- someone's note, say -- fall back to append_rows
-    (after the last non-empty row) rather than write a member into that
-    row."""
-    start = last_member_row + 1
-    for k in range(len(new_rows)):
-        r = start + k
-        existing = current[r - 1] if r - 1 < len(current) else []
-        if any(cell.strip() for cell in existing):
-            response = ws.append_rows(new_rows, value_input_option="USER_ENTERED")
-            return _appended_start_row(response) or len(current) + 1
-
-    needed = start + len(new_rows) - 1
-    if needed > ws.row_count:
-        ws.add_rows(needed - ws.row_count)
-    ws.update(values=new_rows, range_name=f"A{start}", raw=False)
-    return start
+                    last_member_row: int) -> List[int]:
+    """Write each new member into the next empty row after the last member
+    (skipping any row that has something in it -- someone's note, say) and
+    return the row each one went to, in order. Always written at an explicit
+    column-A range: Sheets' "append to table" guessed where the table starts
+    and once put a member's data from column L. Cells we have no value for
+    are sent as null (skipped), so formula columns are untouched. Rows are
+    put in rank order afterwards (_arrange_rows)."""
+    rows: List[int] = []
+    r = last_member_row + 1
+    for _ in new_rows:
+        while r - 1 < len(current) and any(str(cell).strip() for cell in current[r - 1]):
+            r += 1
+        rows.append(r)
+        r += 1
+    if rows and rows[-1] > ws.row_count:
+        ws.add_rows(rows[-1] - ws.row_count)
+    ws.batch_update([{"range": f"A{row}", "values": [values]} for row, values in zip(rows, new_rows)],
+                    value_input_option="USER_ENTERED")
+    return rows
 
 
 def _pad_for_filter_buttons(ws, cols: List[int]) -> None:

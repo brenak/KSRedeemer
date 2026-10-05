@@ -206,7 +206,7 @@ The sync never writes into cells it has no value for, so it can't break a formul
 - **Row 2 on:** active members sorted by rank — Leader, R4, R3, R2, R1 (people with the same rank keep their current order) — then ⬜ inactive members, sorted the same way, no gaps. With 20 members an inactive one sits at row 21. Ranks come from the live roster, so promotions move people on the next sync.
 - **Row 102 on** (below the 100 member slots, or right after the members if there are ever more): ex-members — 🟪 people who left the alliance, and "not found" IDs. Someone who rejoins moves back up automatically.
 
-Whole rows move, so hand-kept columns and notes go with them; rows without a Player ID end up between the two sections. New members are written directly under the last member (found by Player ID); if that slot already holds something, they're appended after the last filled row instead and moved into place. A tab that's already in order isn't touched.
+Whole rows move, so hand-kept columns and notes go with them; rows without a Player ID end up between the two sections. New members are written into the next empty rows under the last member (found by Player ID), always starting at column A; a row that already holds something (a note, say) is skipped. A tab that's already in order isn't touched.
 
 **Switching between tracked alliances.** MightPulse caches each alliance's roster separately (up to about an hour), so right after someone moves from one tracked alliance to another, both rosters can list them. Every sync — even of a single tab — fetches all tracked rosters first, and the most recently refreshed one wins: on the other tabs they show 🟪 with the new tag in `o_tag` and aren't re-added, and Analytics counts them once.
 
