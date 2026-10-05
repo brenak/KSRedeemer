@@ -493,15 +493,20 @@ def row_player_ids(data_rows: List[List[str]], col: Dict[str, int]) -> List[int]
 def _misplaced_member_row(row: List[str], pid_idx: int, known_ids: set) -> bool:
     """A member's row written shifted to the right -- Sheets' "append to
     table" once put new members' data from column L: nothing in the Player
-    ID column, but somewhere else a kingdom number followed directly by a
-    Player ID this tab or roster knows. That exact pattern, so a note that
-    mentions an ID is never mistaken for one."""
+    ID column, but elsewhere a kingdom number directly followed by a Player
+    ID -- one this tab or roster knows, or (for a member no longer on the
+    roster) an 8-10 digit ID followed by a name, the Kingdom / Player ID /
+    Original_Name order of a member row. A note that mentions an ID never
+    has that shape."""
     cells = [str(c).strip() for c in row]
     for i in range(len(cells) - 1):
         if i + 1 == pid_idx:
             continue
         k, p = cells[i], cells[i + 1]
-        if k.isdigit() and len(k) <= 5 and p.isdigit() and int(p) in known_ids:
+        if not (k.isdigit() and len(k) <= 5 and p.isdigit()):
+            continue
+        name_follows = i + 2 < len(cells) and bool(cells[i + 2]) and not cells[i + 2].isdigit()
+        if int(p) in known_ids or (8 <= len(p) <= 10 and name_follows):
             return True
     return False
 
