@@ -125,6 +125,10 @@ ALLIANCE_SLOTS = 100            # most members an alliance can have
 # chart's white background). Each is >= 5:1 against white, and the white
 # count printed on each segment is >= 5:1 against it (WCAG AA).
 ACTIVITY_COLORS = ("2e7d32", "1f6fb2", "616161", "806a45")   # active, no growth, inactive, open slots
+# Town center tier colors, TG5 -> Below TG1 (deeper = higher tier). White
+# counts on each segment are >= 5:1 (WCAG AA) -- black on Sheets' default
+# bright colors was readable but harsh.
+TC_COLORS = ("6a1b9a", "3949ab", "1565c0", "00796b", "2e7d32", "616161")
 HEADER = (["Alliance", "Kingdom", "Members"] + [b[0] for b in TC_BUCKETS]
           + ["Total Power", "Avg Power", "Top Power", "Median Growth %"])
 COL = {h: i for i, h in enumerate(HEADER)}
@@ -332,9 +336,9 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
                         "styleOverrides": _point_colors(list(range(rows)))}],
         },
     }
-    # TC bars: counts printed on each segment (black: >= 5.6:1 on all of
-    # Sheets' default series colors). From its hidden block, where zero
-    # buckets are blank so they don't print a stray "0".
+    # TC bars: TC_COLORS with a white count on each segment. From its
+    # hidden block, where zero buckets are blank so they don't print a
+    # stray "0".
     def tc_series(i: int) -> Dict[str, Any]:
         if tc_col is None:
             return series(TC_BUCKETS[i][0])
@@ -350,8 +354,9 @@ def chart_requests(sheet_id: int, rows: int, first_chart_row: int, growers: int 
             "axis": [{"position": "BOTTOM_AXIS", "title": "Members"}],
             "domains": [{"domain": domain}],
             "series": [{"series": tc_series(i), "targetAxis": "BOTTOM_AXIS",
+                        "colorStyle": {"rgbColor": _hex_to_rgb_float(TC_COLORS[i])},
                         "dataLabel": {"type": "DATA", "placement": "CENTER", "textFormat": {
-                            "bold": True, "foregroundColorStyle": {"rgbColor": {"red": 0, "green": 0, "blue": 0}}}}}
+                            "bold": True, "foregroundColorStyle": {"rgbColor": {"red": 1, "green": 1, "blue": 1}}}}}
                        for i in range(len(TC_BUCKETS))],
         },
     }
