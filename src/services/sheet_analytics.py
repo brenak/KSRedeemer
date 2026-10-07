@@ -59,7 +59,7 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
      "the planned spot is where they already are.", "Nothing to do."),
     (PENDING_PLAN_COLOR, "Planned, not moved yet",
      "At x / y, but KSHive planned them somewhere else (p_x / p_y).", "Remind them to move to p_x / p_y."),
-    (MISMATCH_COLOR, "Moved",
+    (MISMATCH_COLOR, "Not In Spot",
      "On the roster, but at a different position than x / y. The new position is in o_x / o_y.",
      "Check it, then update x / y by hand."),
     (AT_PLAN_COLOR, "Moved to planned spot",
@@ -89,7 +89,7 @@ LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
 ]
 LEGEND_COLUMNS: List[Tuple[str, str]] = [
     ("📊 status (header row, after the last column)",
-     "Members in the 100 slots (live count), then what the last sync found: matched, new position, "
+     "Members in the 100 slots (live count), then what the last sync found: matched, not in spot, "
      "inactive, left, new, and when it ran. Rewritten every sync."),
     ("Kingdom, Current_Name, Rank, TC_Level, Power",
      "Live — refreshed from MightPulse on every sync. TC_Level shows True Gold tiers (55 = TG5, 54 = TG4.4)."),

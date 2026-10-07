@@ -208,7 +208,7 @@ class SyncResult:
                 "would get a header row" if self.dry_run else "header row written"))
         lines += [
             f"🟩 Matched: {self.matched}",
-            f"🟨 Position changed: {self.mismatched}",
+            f"🟨 Not in spot: {self.mismatched}",
             f"🩷 Planned elsewhere, not moved yet: {self.pending_plan}",
             f"🎯 Moved to their planned spot (o_x / o_y = p_x / p_y): {self.at_plan}",
             f"🟪 No longer in alliance: {self.not_in_alliance}",
@@ -345,7 +345,7 @@ def split_status(header: List[str]) -> Tuple[List[str], Optional[int]]:
 
 def _status_body(result: "SyncResult", synced_at: str) -> str:
     """Everything after "📊 98/100 members · "."""
-    parts = [f"🟩 {result.matched} matched", f"🟨 {result.mismatched} new position",
+    parts = [f"🟩 {result.matched} matched", f"🟨 {result.mismatched} not in spot",
              f"⬜ {result.position_unknown} inactive", f"🟪 {result.not_in_alliance} left"]
     if result.at_plan:
         parts.insert(2, f"🎯 {result.at_plan} at planned spot")
