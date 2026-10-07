@@ -19,7 +19,9 @@ from services.mightpulse_client import MightPulseClient, MightPulseError, MightP
 from services.sheet_sync import (
     sheet_link,
     INACTIVE_COLOR,
+    AT_PLAN_COLOR,
     MATCH_COLOR,
+    PENDING_PLAN_COLOR,
     MISMATCH_COLOR,
     NOT_IN_ALLIANCE_COLOR,
     POWER_NUMBER_FORMAT,
@@ -52,10 +54,18 @@ RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB, HISTORY_TAB, health_history.HEALTH_T
 # Legend rows are built from the same color constants the sync paints with,
 # so the key can't drift from what's on the alliance tabs.
 LEGEND_COLORS: List[Tuple[Optional[str], str, str, str]] = [
-    (MATCH_COLOR, "Matched", "On the alliance roster, at the position recorded in x / y.", "Nothing to do."),
+    (MATCH_COLOR, "Matched",
+     "On the alliance roster, at the position recorded in x / y — and either no planned spot (p_x / p_y) or "
+     "the planned spot is where they already are.", "Nothing to do."),
+    (PENDING_PLAN_COLOR, "Planned, not moved yet",
+     "At x / y, but KSHive planned them somewhere else (p_x / p_y).", "Remind them to move to p_x / p_y."),
     (MISMATCH_COLOR, "Moved",
      "On the roster, but at a different position than x / y. The new position is in o_x / o_y.",
      "Check it, then update x / y by hand."),
+    (AT_PLAN_COLOR, "Moved to planned spot",
+     "On the roster, and moved to the planned spot from KSHive: o_x / o_y = p_x / p_y. No growth still wins "
+     "over this color.",
+     "Once the move is final, update x / y to match (the row turns green)."),
     (NOT_IN_ALLIANCE_COLOR, "Left the alliance",
      "No longer on this alliance's roster. o_tag shows where they went: a tag, \"none\" (no "
      "alliance), or \"left\" (MightPulse hasn't caught up yet). Moved below the 100 member slots "

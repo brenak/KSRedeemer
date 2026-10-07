@@ -30,8 +30,10 @@ For every sheet row with a Player ID (the in-game FID):
   compared.
 - On the roster -> compare the sheet's `x`/`y` (recorded, never
   overwritten here) with the lookup's current x/y:
-  - match -> clear o_x/o_y, paint MATCH_COLOR
-  - differ -> write current x/y into o_x/o_y, MISMATCH_COLOR
+  - match -> clear o_x/o_y, paint MATCH_COLOR -- unless KSHive planned
+    them somewhere else (p_x / p_y set and != x / y): PENDING_PLAN_COLOR
+  - differ -> write current x/y into o_x/o_y, MISMATCH_COLOR -- or
+    AT_PLAN_COLOR when o_x / o_y is the planned spot
   - no position available (MightPulse has no map location -- in practice
     an inactive player) -> INACTIVE_COLOR, and the row is moved below the
     active ones; counted as position_unknown
@@ -80,6 +82,12 @@ NOT_IN_ALLIANCE_COLOR = "8e7cc3"
 # an inactive player. Google's "dark gray 1" swatch; these rows are also
 # moved to the bottom of the tab (see _move_inactive_to_bottom).
 INACTIVE_COLOR = "b7b7b7"
+# o_x / o_y = KSHive's planned p_x / p_y: they've moved into the layout.
+# Google's "dark cyan 1" swatch (black text on it stays >= 4.5:1).
+AT_PLAN_COLOR = "45818e"
+# Planned somewhere else in KSHive (p_x / p_y != x / y), not moved yet.
+# Google's "light magenta 1" swatch.
+PENDING_PLAN_COLOR = "c27ba0"
 NOT_FOUND_NOTE = "not found"
 # Power shown as 235,248,429 -- applied to the Power column on every write.
 POWER_NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
@@ -147,6 +155,8 @@ class SheetSyncError(Exception):
 class SyncResult:
     matched: int = 0
     mismatched: int = 0
+    at_plan: int = 0                  # moved to their KSHive planned spot (o_ = p_)
+    pending_plan: int = 0             # planned elsewhere in KSHive, not moved yet
     not_in_alliance: int = 0
     labels_updated: int = 0
     kingdoms_changed: int = 0
@@ -170,6 +180,10 @@ class SyncResult:
         """One line for the daily auto-sync post."""
         parts = [f"🟩{self.matched}", f"🟨{self.mismatched}", f"🟪{self.not_in_alliance}",
                  f"⬜{self.position_unknown}", f"➕{self.new_members_added}"]
+        if self.pending_plan:
+            parts.append(f"🩷{self.pending_plan} to move")
+        if self.at_plan:
+            parts.append(f"🎯{self.at_plan} at planned spot")
         if self.stalled:
             parts.append(f"💤{self.stalled} no growth")
         if self.kingdoms_changed:
@@ -195,6 +209,8 @@ class SyncResult:
         lines += [
             f"🟩 Matched: {self.matched}",
             f"🟨 Position changed: {self.mismatched}",
+            f"🩷 Planned elsewhere, not moved yet: {self.pending_plan}",
+            f"🎯 Moved to their planned spot (o_x / o_y = p_x / p_y): {self.at_plan}",
             f"🟪 No longer in alliance: {self.not_in_alliance}",
             f"➕ New members {'to add' if self.dry_run else 'added'}: {self.new_members_added}",
         ]
@@ -331,6 +347,10 @@ def _status_body(result: "SyncResult", synced_at: str) -> str:
     """Everything after "📊 98/100 members · "."""
     parts = [f"🟩 {result.matched} matched", f"🟨 {result.mismatched} new position",
              f"⬜ {result.position_unknown} inactive", f"🟪 {result.not_in_alliance} left"]
+    if result.at_plan:
+        parts.insert(2, f"🎯 {result.at_plan} at planned spot")
+    if result.pending_plan:
+        parts.insert(2, f"🩷 {result.pending_plan} to move")
     if result.stalled:
         parts.insert(2, f"💤 {result.stalled} no growth")
     if result.new_members_added:
@@ -645,19 +665,32 @@ def plan_sync(
 
         sheet_x = _parse_int_cell(row, col["x"])
         sheet_y = _parse_int_cell(row, col["y"])
+        # KSHive's planned spot; only counts when both cells hold a number.
+        planned = (_parse_int_cell(row, col["p_x"]), _parse_int_cell(row, col["p_y"])) \
+            if "p_x" in col and "p_y" in col else (None, None)
+        has_plan = None not in planned
         if sheet_x == cur_x and sheet_y == cur_y:
-            result.matched += 1
             put("observed_x", row_num, "")
             put("observed_y", row_num, "")
-            color = MATCH_COLOR
+            if has_plan and planned != (sheet_x, sheet_y):   # green = good where they are
+                result.pending_plan += 1
+                color = PENDING_PLAN_COLOR
+            else:
+                result.matched += 1
+                color = MATCH_COLOR
         else:
-            result.mismatched += 1
             put("observed_x", row_num, cur_x)
             put("observed_y", row_num, cur_y)
-            color = MISMATCH_COLOR
+            if has_plan and planned == (cur_x, cur_y):       # o_ = p_: moved into the layout
+                result.at_plan += 1
+                color = AT_PLAN_COLOR
+            else:
+                result.mismatched += 1
+                color = MISMATCH_COLOR
+        stalled = g is not None and g.stalled
         # Trending inactive: own color (o_x / o_y above still tell whether
         # they moved) and moved down below the active members.
-        if g is not None and g.stalled:
+        if stalled:
             result.stalled += 1
             color = STALL_COLOR
             stalled_rows.append(row_num)
