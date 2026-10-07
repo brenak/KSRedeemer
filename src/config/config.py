@@ -33,6 +33,11 @@ SHEET_DEFAULT_TAB = os.getenv("SHEET_DEFAULT_TAB", "1MK").strip()
 # Time zone for sheet timestamps and the date power snapshots are filed
 # under (IANA name, e.g. America/New_York, America/Chicago, UTC).
 SHEET_TIMEZONE = os.getenv("SHEET_TIMEZONE", "America/New_York").strip() or "UTC"
+# KSHive (alliance placement planner): sheet sync messages link each tab's
+# plan(s) with their view-only share link. Needs the same KSHIVE_BOT_TOKEN
+# KSHive has; blank = no links.
+KSHIVE_URL = os.getenv("KSHIVE_URL", "https://kshive.duckdns.org").strip().rstrip("/")
+KSHIVE_BOT_TOKEN = os.getenv("KSHIVE_BOT_TOKEN", "").strip()
 # Automatic full /sheet sync (every tab + Analytics) every N hours; 0 = off.
 SHEET_AUTO_SYNC_HOURS = max(0, int(os.getenv("SHEET_AUTO_SYNC_HOURS", "24") or 0))
 

@@ -22,6 +22,7 @@ from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analyt
 from services.power_growth import PowerContext, prepare_power, take_checkpoint, today_str
 from services import health_history
 from services.mightpulse_map_update import update_maps
+from services.kshive_links import links_text, plan_links
 from services.sheet_sync import (
     sheet_link,
     SheetSyncError,
@@ -130,6 +131,8 @@ async def run_sheet_sync(
                 lines.append(line)
             else:
                 await send(line)
+    # Each tab's KSHive plan(s), linked next to the tab (one request, best effort).
+    hive = await plan_links(t["tab"] for t in targets)
     try:
         await prefetch_rosters(client, list(sheet_targets(bot_data)), roster_cache)
         # Today's power snapshot (real runs only) + growth baselines.
@@ -150,12 +153,14 @@ async def run_sheet_sync(
                 health[t["tab"]] = health_history.counts_from_result(result)
             print(f"📋 Sheet sync {t['tab']}{' (dry run)' if dry_run else ''}: {result.compact_summary()}")
             if compact:
-                lines.append(f"✅ {sheet_link(t['tab'], result.tab_gid)} — {result.compact_summary()}")
+                lines.append(f"✅ {sheet_link(t['tab'], result.tab_gid)}{links_text(hive.get(t['tab'], []))}"
+                             f" — {result.compact_summary()}")
                 continue
             header = (
                 f"📋 **[dry run — nothing written] {_describe(t)}**"
                 if dry_run else f"📋 **Synced {_describe(t)}**"
-            ) + (f" · {sheet_link('open tab', result.tab_gid)}" if result.tab_gid is not None else "")
+            ) + (f" · {sheet_link('open tab', result.tab_gid)}" if result.tab_gid is not None else "") \
+                + links_text(hive.get(t["tab"], []))
             message = "\n".join([header] + result.summary_lines())
         except SheetSyncError as e:
             message = f"❌ {_describe(t)}: {e}"

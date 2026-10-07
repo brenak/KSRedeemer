@@ -148,6 +148,8 @@ docker compose logs -f
 | `GOOGLE_SHEETS_CREDENTIALS_PATH` | ❌ No | `/app/secrets/google-service-account.json` (compose) | Google service-account JSON key for `/sheet sync`. |
 | `GOOGLE_SHEET_ID` | ❌ No | the alliance roster spreadsheet | Spreadsheet ID (between `/d/` and `/edit` in its URL). All tabs live in this one spreadsheet. |
 | `SHEET_DEFAULT_KINGDOM` / `SHEET_DEFAULT_TAG` / `SHEET_DEFAULT_TAB` | ❌ No | `1343` / `1MK` / `1MK` | The first alliance → tab target. Only seeds the list the first time; after that it's managed with `/sheet add` / `/sheet remove` and stored in `botData.json`. Tag is case-sensitive. |
+| `KSHIVE_URL` | ❌ No | `https://kshive.duckdns.org` | KSHive (placement planner) address, for plan links in sheet sync messages. |
+| `KSHIVE_BOT_TOKEN` | ❌ No | — | Same value as `KSHIVE_BOT_TOKEN` in KSHive's env. When set, each synced tab's message links its KSHive plan(s) (view-only share link). Blank = no links. |
 | `SHEET_TIMEZONE` | ❌ No | `America/New_York` | Time zone for sheet timestamps and the date power snapshots are filed under (any IANA name, e.g. `America/Chicago`, `UTC`). |
 | `SHEET_AUTO_SYNC_HOURS` | ❌ No | `24` | Run a full `/sheet sync` (every tab + Analytics) automatically every N hours and post a summary to the bot channel. `0` turns it off. |
 
