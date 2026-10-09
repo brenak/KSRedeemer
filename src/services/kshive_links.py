@@ -14,10 +14,22 @@ from config.config import KSHIVE_BOT_TOKEN, KSHIVE_URL
 MAX_LINKS = 3   # per tab -- a tab rarely has more than one plan
 
 
+def status_line() -> str:
+    """For the startup log and each sync: whether links are on, and why not."""
+    if not KSHIVE_BOT_TOKEN:
+        return "🐝 KSHive plan links off: KSHIVE_BOT_TOKEN isn't set in the container's environment"
+    if not KSHIVE_URL:
+        return "🐝 KSHive plan links off: KSHIVE_URL is blank"
+    return f"🐝 KSHive plan links on ({KSHIVE_URL})"
+
+
 async def plan_links(tabs: Iterable[str]) -> Dict[str, List[Tuple[str, str]]]:
     """{tab: [(plan name, share URL), ...]} for tabs that have a plan."""
     tabs = list(tabs)
-    if not (KSHIVE_BOT_TOKEN and KSHIVE_URL and tabs):
+    if not (KSHIVE_BOT_TOKEN and KSHIVE_URL):
+        print(status_line())
+        return {}
+    if not tabs:
         return {}
     try:
         async with aiohttp.ClientSession() as session:
