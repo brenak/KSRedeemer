@@ -20,7 +20,8 @@ from dcBot.permissions import check_channel_only, check_permissions
 from services.mightpulse_client import MightPulseClient
 from services.sheet_analytics import ANALYTICS_TAB, RESERVED_TABS, update_analytics
 from services.power_growth import PowerContext, prepare_power, take_checkpoint, today_str
-from services import health_history
+from services import health_history, name_history
+from services.power_growth import load_history
 from services.mightpulse_map_update import update_maps
 from services.kshive_links import links_text, plan_links
 from services.sheet_sync import (
@@ -143,6 +144,8 @@ async def run_sheet_sync(
         await send(f"❌ Sheet sync failed before any tab was written: {_reason(e)}. Try again in a few minutes.")
         return
     health: Dict[str, Any] = {}   # tab -> counts, for the health chart
+    renames: List[name_history.Rename] = []     # for the Name History tab
+    originals: List[name_history.Rename] = []
     for t in targets:
         try:
             result = await sync_alliance_sheet(
@@ -151,6 +154,8 @@ async def run_sheet_sync(
             )
             if not dry_run:
                 health[t["tab"]] = health_history.counts_from_result(result)
+                renames += [(pid, old, new, t["tag"]) for pid, old, new in result.renames]
+                originals += [(pid, old, new, t["tag"]) for pid, old, new in result.original_names]
             print(f"📋 Sheet sync {t['tab']}{' (dry run)' if dry_run else ''}: {result.compact_summary()}")
             if compact:
                 lines.append(f"✅ {sheet_link(t['tab'], result.tab_gid)}{links_text(hive.get(t['tab'], []))}"
@@ -175,6 +180,16 @@ async def run_sheet_sync(
         if len(message) > 1900:
             message = message[:1900] + "\n…(truncated)"
         await send(message)
+
+    # Every rename kept for good (the tabs only hold the first and latest).
+    if not dry_run:
+        try:
+            added = await asyncio.to_thread(
+                lambda: name_history.record(open_spreadsheet(), today_str(), renames, originals))
+            if added:
+                print(f"🏷️ Name History: {added} row(s) added")
+        except Exception as e:
+            print(f"⚠️ Name history not recorded: {_reason(e)}")
 
     # Analytics covers every target, not just the ones synced now; rosters
     # fetched above are reused, the rest cost one call each.
@@ -289,6 +304,44 @@ def register_sheet_commands(
             await send_followup(interaction, await _run_analytics())
 
         await add_queue.enqueue(do_analytics())
+
+    @group.command(name="whois", description="Look a player up by any name they've used (or Player ID)")
+    @app_commands.describe(name="Old or current name (partial match), or a Player ID")
+    async def sheet_whois(interaction: discord.Interaction, name: str):
+        permission_error = check_channel_only(interaction, bot_data)
+        if permission_error:
+            await interaction.response.send_message(permission_error, ephemeral=True)
+            return
+        await interaction.response.defer(thinking=True)
+        if not configured():
+            await send_followup(interaction,
+                "❌ Sheet sync isn't configured on this bot (GOOGLE_SHEETS_CREDENTIALS_PATH / GOOGLE_SHEET_ID)."
+            )
+            return
+
+        def lookup():
+            sh = open_spreadsheet()
+            return name_history.search(name, name_history.load(sh), name_history.latest_names(load_history(sh)))
+
+        try:
+            hits = await asyncio.to_thread(lookup)
+        except Exception as e:
+            await send_followup(interaction, f"❌ Couldn't read the sheet: {_reason(e)}")
+            return
+        if not hits:
+            await send_followup(interaction,
+                f"🔎 Nobody tracked has gone by a name containing `{name}`. "
+                f"(Names are recorded from the daily sheet sync on.)")
+            return
+        blocks = []
+        for pid, cur, rows in hits:
+            title = (f"**{cur[0]}** · [{cur[1]}] · kingdom {cur[2]}" if cur
+                     else f"**{rows[-1][2]}** · [{rows[-1][3]}]")
+            lines = [f"{title} · ID `{pid}`"]
+            lines += [f"• {r[1]} → {r[2]} · {r[4]}" for r in rows] or ["• no other names recorded"]
+            blocks.append("\n".join(lines))
+        message = f"🔎 **{len(hits)} match{'es' if len(hits) != 1 else ''}** for `{name}`\n\n" + "\n\n".join(blocks)
+        await send_followup(interaction, message[:1900] + ("\n…(truncated)" if len(message) > 1900 else ""))
 
     @group.command(name="checkpoint", description="Start measuring power growth from now (run right after KvK)")
     async def sheet_checkpoint(interaction: discord.Interaction):

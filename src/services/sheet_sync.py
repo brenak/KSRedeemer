@@ -162,6 +162,11 @@ class SyncResult:
     kingdoms_changed: int = 0
     position_unknown: int = 0
     stalled: int = 0                  # no power growth for STALL_DAYS+ days
+    # For the Name History tab: (player id, Current_Name on the sheet, live
+    # name) per rename, and (player id, Original_Name, current name) for
+    # everyone renamed since they were first added.
+    renames: List[Tuple[int, str, str]] = field(default_factory=list)
+    original_names: List[Tuple[int, str, str]] = field(default_factory=list)
     members: int = 0                  # on this alliance's live roster (health chart)
     misplaced_cleared: int = 0        # shifted copies of a member row cleared (see _misplaced_member_row)
     skipped_no_player_id: int = 0
@@ -607,6 +612,11 @@ def plan_sync(
         if nick and nick != sheet_label:
             result.labels_updated += 1
             put("_label", row_num, nick)
+            if sheet_label:
+                result.renames.append((pid, sheet_label, nick))
+        original, current = cell(row, "original_name"), nick or sheet_label
+        if original and current and original != current:
+            result.original_names.append((pid, original, current))
 
         # Kingdom is live, like the name: a transfer shows where they went.
         kid = _live_kingdom(roster_entry or None, player)

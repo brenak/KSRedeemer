@@ -34,6 +34,7 @@ from services.sheet_sync import (
     _col_letter,
 )
 from services import health_history
+from services.name_history import NAME_TAB
 from services.power_growth import (
     STALL_COLOR,
     STALL_DAYS,
@@ -49,7 +50,7 @@ from services.power_growth import (
 
 ANALYTICS_TAB = "Analytics"
 LEGEND_TAB = "Legend"
-RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB, HISTORY_TAB, health_history.HEALTH_TAB)
+RESERVED_TABS = (ANALYTICS_TAB, LEGEND_TAB, HISTORY_TAB, health_history.HEALTH_TAB, NAME_TAB)
 
 # Legend rows are built from the same color constants the sync paints with,
 # so the key can't drift from what's on the alliance tabs.
@@ -113,6 +114,8 @@ LEGEND_FOOTER = [
     "and ex-members from row 102.",
     f"The {ANALYTICS_TAB} tab compares alliances with at least 5 billion total power.",
     f"Power is recorded daily in the hidden '{HISTORY_TAB}' tab (last {HISTORY_DAYS} days) to measure growth.",
+    f"Every rename is kept in the '{NAME_TAB}' tab (never pruned) — search it, or use /sheet whois in Discord "
+    "to find a player by an old name.",
 ]
 # Alliances below this total power are left off the table and charts (and
 # noted under the table), so small alliances don't clutter the comparison.

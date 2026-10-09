@@ -120,6 +120,8 @@ def register_help_command(tree: app_commands.CommandTree, bot_data):
                     "🟪 left the alliance (see `o_tag`)\n"
                     "• Updates names and `Kingdom`, adds missing members; never changes `x`/`y`/`Current_Tag` "
                     "— differences go in `o_*`\n"
+                    "• Keeps every rename in the `Name History` tab; `/sheet whois <name>` finds a player "
+                    "by any name they've used\n"
                     "• One lookup per member — takes a couple of minutes\n"
                     "• `dry_run: True` previews counts without writing\n"
                     "• Requires bot admin permissions"
