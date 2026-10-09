@@ -3,7 +3,7 @@ import hashlib
 import json
 import random
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -70,6 +70,15 @@ EXPIRED_CODE_ERR_CODE = 40007
 # expired, batch stopped). It used to be counted as "already redeemed".
 CLAIM_LIMIT_ERR_CODE = 40005
 
+# "Try again later" answers -- about the moment, not the player or the code.
+# Seen in a burst right after a new code drops (everyone redeeming at once):
+# 40004 "Server busy", plus the two "too frequent" variants. Each player is
+# retried a few times with a growing wait, and anyone still failing gets one
+# more try after the whole batch (what /catchup used to be needed for).
+BUSY_ERR_CODES = {40002, 40004, 40019}
+BUSY_RETRY_DELAYS_SECONDS = (5, 15, 30)
+BUSY_SECOND_PASS_DELAY_SECONDS = 60
+
 
 def _sign(params: Dict[str, str]) -> str:
     query = "&".join(f"{key}={params[key]}" for key in sorted(params))
@@ -79,13 +88,27 @@ def _sign(params: Dict[str, str]) -> str:
 async def perform_giftcode_redeem(
     player_id: str, kingdom: str, gift_code: str, session: aiohttp.ClientSession
 ) -> Dict[str, Any]:
+    """One player's redemption, retrying "server busy" answers a few times."""
+    result = await _redeem_once(player_id, kingdom, gift_code, session)
+    for delay in BUSY_RETRY_DELAYS_SECONDS:
+        if result.get("err_code") not in BUSY_ERR_CODES:
+            break
+        print(f"Gift-code server busy for {player_id} (err_code={result['err_code']}), retrying in {delay}s...")
+        await asyncio.sleep(delay)
+        result = await _redeem_once(player_id, kingdom, gift_code, session)
+    return result
+
+
+async def _redeem_once(
+    player_id: str, kingdom: str, gift_code: str, session: aiohttp.ClientSession
+) -> Dict[str, Any]:
     print(f"Trying to redeem [{gift_code}] for player: {player_id} (kingdom {kingdom})")
 
     params = {
         "fid": player_id,
         "cdk": gift_code,
         "kid": kingdom,
-        "time": str(int(time.time())),
+        "time": str(int(time.time())),   # fresh per attempt -- part of the sign
     }
     body = {"sign": _sign(params), **params}
 
@@ -143,66 +166,79 @@ async def perform_giftcode_redeem(
     }
 
 
+def _batch_stop(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The whole-batch entry when this answer means nobody else should be
+    tried (rate limited, or a problem with the code itself), else None."""
+    if result.get("rate_limited"):
+        # Every request right after a 429 has been observed to also
+        # 429 -- stop here rather than burning through the rest of
+        # the roster into more rate limiting. Players not yet
+        # reached just get picked up on the next catchup/redeem.
+        return {
+            "success": False,
+            "errorCode": "RATE_LIMITED",
+            "message": "Rate limited by the gift-code server. Remaining players skipped this run.",
+        }
+    err_code = result.get("err_code")
+    if err_code == INVALID_CODE_ERR_CODE:
+        return {"success": False, "errorCode": "INVALID_CODE", "message": "Invalid gift code."}
+    if err_code in (EXPIRED_CODE_ERR_CODE, CLAIM_LIMIT_ERR_CODE):
+        # Same errorCode for both, so every caller marks the code
+        # expired and drops it from the active list.
+        return {
+            "success": False,
+            "errorCode": "EXPIRED",
+            "message": ("Gift code has reached its claim limit." if err_code == CLAIM_LIMIT_ERR_CODE
+                        else "Gift code has expired."),
+        }
+    return None
+
+
+def _player_entry(player: Dict[str, str], result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "player_id": player.get("player_id", ""),
+        "stored_player_nick": player.get("player_nick"),
+        "result": result,
+        # Player already has this code -- counts as done.
+        "success": result.get("err_code") in ALREADY_REDEEMED_ERR_CODES or result.get("success", False),
+    }
+
+
 async def redeem_giftcode_for_all_players(players: List[Dict[str, str]], gift_code: str) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
+    still_busy: List[Tuple[int, Dict[str, str]]] = []   # (index into results, player): busy after the retries
+
+    async def redeem(session: aiohttp.ClientSession, player: Dict[str, str]) -> Dict[str, Any]:
+        kingdom = player.get("kingdom") or DEFAULT_KINGDOM
+        return await perform_giftcode_redeem(player.get("player_id", ""), kingdom, gift_code, session)
 
     async with aiohttp.ClientSession() as session:
         for i, player in enumerate(players):
             if i > 0:
                 await asyncio.sleep(random.uniform(2, 4))  # polite pacing between requests
-
-            player_id = player.get("player_id", "")
-            kingdom = player.get("kingdom") or DEFAULT_KINGDOM
-            stored_nick = player.get("player_nick")
-
-            result = await perform_giftcode_redeem(player_id, kingdom, gift_code, session)
-
-            if result.get("rate_limited"):
-                # Every request right after a 429 has been observed to also
-                # 429 -- stop here rather than burning through the rest of
-                # the roster into more rate limiting. Players not yet
-                # reached just get picked up on the next catchup/redeem.
-                results.append({
-                    "success": False,
-                    "errorCode": "RATE_LIMITED",
-                    "message": "Rate limited by the gift-code server. Remaining players skipped this run.",
-                })
+            result = await redeem(session, player)
+            stop = _batch_stop(result)
+            if stop:
+                results.append(stop)
                 return results
+            if result.get("err_code") in BUSY_ERR_CODES:
+                still_busy.append((len(results), player))
+            results.append(_player_entry(player, result))
 
-            err_code = result.get("err_code")
-
-            if err_code == INVALID_CODE_ERR_CODE:
-                results.append({
-                    "success": False,
-                    "errorCode": "INVALID_CODE",
-                    "message": "Invalid gift code.",
-                })
-                return results
-
-            elif err_code in (EXPIRED_CODE_ERR_CODE, CLAIM_LIMIT_ERR_CODE):
-                # Same errorCode for both, so every caller marks the code
-                # expired and drops it from the active list.
-                results.append({
-                    "success": False,
-                    "errorCode": "EXPIRED",
-                    "message": ("Gift code has reached its claim limit." if err_code == CLAIM_LIMIT_ERR_CODE
-                                else "Gift code has expired."),
-                })
-                return results
-
-            elif err_code in ALREADY_REDEEMED_ERR_CODES:
-                results.append({
-                    "player_id": player_id,
-                    "stored_player_nick": stored_nick,
-                    "result": result,
-                    "success": True,
-                })
-            else:
-                results.append({
-                    "player_id": player_id,
-                    "stored_player_nick": stored_nick,
-                    "result": result,
-                    "success": result.get("success", False),
-                })
+        # Second pass: the busy burst right after a code drops is usually
+        # over a minute later.
+        if still_busy:
+            print(f"🔁 {len(still_busy)} player(s) got 'server busy' for [{gift_code}] -- "
+                  f"one more try in {BUSY_SECOND_PASS_DELAY_SECONDS}s")
+            await asyncio.sleep(BUSY_SECOND_PASS_DELAY_SECONDS)
+            for n, (idx, player) in enumerate(still_busy):
+                if n > 0:
+                    await asyncio.sleep(random.uniform(2, 4))
+                result = await redeem(session, player)
+                stop = _batch_stop(result)
+                if stop:
+                    results.append(stop)
+                    return results
+                results[idx] = _player_entry(player, result)
 
         return results
