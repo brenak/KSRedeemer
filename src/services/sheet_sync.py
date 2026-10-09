@@ -834,6 +834,45 @@ def configured() -> bool:
     return bool(GOOGLE_SHEETS_CREDENTIALS_PATH and GOOGLE_SHEET_ID)
 
 
+# Player ID -> (x, y, tab, live, member): live = it's o_x / o_y (they're
+# not at x / y), member = a row in the member slots, not an ex-member's.
+Position = Tuple[int, int, str, bool, bool]
+
+
+def player_positions(sh, tabs: List[str], player_ids) -> Dict[str, Position]:
+    """Where each of `player_ids` is, per the alliance tabs (blocking, one
+    request for every tab): o_x / o_y when set, else x / y. A member row
+    wins over an ex-member row on another tab."""
+    wanted = {str(p) for p in player_ids}
+    if not (wanted and tabs):
+        return {}
+    ranges = ["'" + t.replace("'", "''") + "'" for t in tabs]
+    value_ranges = sh.values_batch_get(ranges).get("valueRanges", [])
+    out: Dict[str, Position] = {}
+    for tab, vr in zip(tabs, value_ranges):
+        values = vr.get("values") or []
+        if not values:
+            continue
+        try:
+            col = resolve_columns(split_status(values[0])[0])
+        except SheetSyncError:
+            continue   # not an alliance tab layout
+        for row_num, row in enumerate(values[1:], start=2):
+            pid = _parse_int_cell(row, col["player id"])
+            if pid is None or str(pid) not in wanted:
+                continue
+            ox, oy = _parse_int_cell(row, col["observed_x"]), _parse_int_cell(row, col["observed_y"])
+            x, y = _parse_int_cell(row, col["x"]), _parse_int_cell(row, col["y"])
+            live = ox is not None and oy is not None
+            if not live and (x is None or y is None):
+                continue
+            member = row_num < DEPARTED_SECTION_ROW
+            if str(pid) in out and (out[str(pid)][4] or not member):
+                continue   # keep the member row / the first one found
+            out[str(pid)] = (ox, oy, tab, True, member) if live else (x, y, tab, False, member)
+    return out
+
+
 def open_spreadsheet():
     """Authenticated gspread Spreadsheet for GOOGLE_SHEET_ID (blocking)."""
     if not GOOGLE_SHEETS_CREDENTIALS_PATH:

@@ -29,6 +29,7 @@ from services.sheet_sync import (
     SheetSyncError,
     configured,
     open_spreadsheet,
+    player_positions,
     prefetch_rosters,
     superseded_members,
     sync_alliance_sheet,
@@ -321,10 +322,12 @@ def register_sheet_commands(
 
         def lookup():
             sh = open_spreadsheet()
-            return name_history.search(name, name_history.load(sh), name_history.latest_names(load_history(sh)))
+            found = name_history.search(name, name_history.load(sh), name_history.latest_names(load_history(sh)))
+            tabs = [t["tab"] for t in sheet_targets(bot_data)]
+            return found, player_positions(sh, tabs, [pid for pid, _c, _r in found])
 
         try:
-            hits = await asyncio.to_thread(lookup)
+            hits, positions = await asyncio.to_thread(lookup)
         except Exception as e:
             await send_followup(interaction, f"❌ Couldn't read the sheet: {_reason(e)}")
             return
@@ -338,6 +341,11 @@ def register_sheet_commands(
             title = (f"**{cur[0]}** · [{cur[1]}] · kingdom {cur[2]}" if cur
                      else f"**{rows[-1][2]}** · [{rows[-1][3]}]")
             lines = [f"{title} · ID `{pid}`"]
+            pos = positions.get(pid)
+            if pos:
+                x, y, tab, live, member = pos
+                lines.append(f"📍 {x}, {y}" + (" (o_x / o_y — not at x / y)" if live else "")
+                             + f" · tab {tab}" + ("" if member else " (ex-member row)"))
             lines += [f"• {r[1]} → {r[2]} · {r[4]}" for r in rows] or ["• no other names recorded"]
             blocks.append("\n".join(lines))
         message = f"🔎 **{len(hits)} match{'es' if len(hits) != 1 else ''}** for `{name}`\n\n" + "\n\n".join(blocks)
